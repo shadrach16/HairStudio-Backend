@@ -10,9 +10,8 @@ const { trackEvent } = require('../utils/analytics');
 const { low_cut,standard_prompt, analysis_prompt } = require('../prompts/all_prompts');
 const fs = require('fs');
 const path = require('path');
-const { uploadToCloudinary } = require('../utils/cloudinary'); // 👈 Import Cloudinary utility
- 
- 
+const { uploadToCloudinary } = require('../utils/cloudinary');
+const { generationLimit } = require('../middleware/rateLimit');
 
 const router = express.Router();
 
@@ -131,14 +130,14 @@ const hairstyleFile = files.hairstyleImage[0];
         });
         await newHairstyle.save();
 
-        // 5. Create Generation Record (using the new Hairstyle ID)
-        const originalImageDataUrl = `data:${userPhotoMimeType};base64,${userPhotoBuffer.toString('base64')}`;
+        // 5. Upload the user's original photo to Cloudinary (avoid storing base64 blobs in MongoDB)
+        const originalUserPhotoUpload = await uploadToCloudinary(userPhotoBuffer, 'original_images');
 
         const generation = new Generation({
             user: user._id,
             hairstyle: newHairstyle._id, 
-            'originalImage.url': originalImageDataUrl,
-            'originalImage.publicId': null,
+          'originalImage.url': originalUserPhotoUpload.secure_url,
+          'originalImage.publicId': originalUserPhotoUpload.public_id,
             creditsUsed: CUSTOM_STYLE_PRICE,
             status: 'processing',
             metadata: {
@@ -275,7 +274,8 @@ const hairstyleFile = files.hairstyleImage[0];
 
 
 // Generate hairstyle (Standard Hairstyle Generation)
-router.post('/generate', protect, upload.single('image'), [
+// Rate limited to prevent AI abuse
+router.post('/generate', protect, generationLimit, upload.single('image'), [
   body('hairstyleId').isMongoId().withMessage('Valid hairstyle ID is required')
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -304,17 +304,17 @@ router.post('/generate', protect, upload.single('image'), [
     // Pre-increment and save (Deducting credit is done right before async call)
     hairstyle.generationCount = hairstyle.generationCount+1
     await hairstyle.save() 
-    
 
- const originalImageDataUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+      // Upload the user's original photo to Cloudinary (avoid storing base64 blobs in MongoDB)
+      const originalUserPhotoUpload = await uploadToCloudinary(req.file.buffer, 'original_images');
 
 
     // 1. Create the generation record 
     const generation = new Generation({
       user: user._id,
       hairstyle: hairstyle._id,
-      'originalImage.url': originalImageDataUrl,
-      'originalImage.publicId': null,
+      'originalImage.url': originalUserPhotoUpload.secure_url,
+      'originalImage.publicId': originalUserPhotoUpload.public_id,
       creditsUsed: hairstyle.price,
       status: 'processing',
        metadata: {
@@ -442,18 +442,18 @@ router.get('/:id/status', protect, async (req, res) => {
 
 
 
-// Get user generations history (No change needed here)
+// Get user generations history
 router.get('/history', protect, async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
 
-    const generations = await Generation.find({ userId: req.user._id })
-      .populate('hairstyleId', 'name thumbnail category')
+    const generations = await Generation.find({ user: req.user._id })
+      .populate('hairstyle', 'name thumbnail category')
       .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit));
 
-    const total = await Generation.countDocuments({ userId: req.user._id });
+    const total = await Generation.countDocuments({ user: req.user._id });
 
     res.json({
       success: true,

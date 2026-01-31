@@ -20,7 +20,11 @@ const hairstyleRoutes = require('./routes/hairstyles');
 const generationRoutes = require('./routes/generations');
 const analyticsRoutes = require('./routes/analytics');
 const webhookRoutes = require('./routes/webhook');
-const watermarkRoutes = require('./routes/watermark'); // 👈 ADD THIS LINE
+const watermarkRoutes = require('./routes/watermark');
+const paymentRoutes = require('./routes/payments');
+const favoriteRoutes = require('./routes/favorites');
+const streakRoutes = require('./routes/streaks');
+const pushRoutes = require('./routes/push');
 
 
 const app = express();
@@ -112,6 +116,11 @@ app.use('/api/users', userRoutes);
 app.use('/api/hairstyles', hairstyleRoutes);
 app.use('/api/generations', generationRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/streaks', streakRoutes);
+app.use('/api/push', pushRoutes);
+app.use('/api/watermark', watermarkRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -131,8 +140,14 @@ app.use('*', (req, res) => {
     availableRoutes: [
       'GET /health',
       'POST /api/auth/google',
+      'GET /api/auth/me',
       'GET /api/hairstyles',
       'POST /api/generations/generate',
+      'GET /api/generations/history',
+      'POST /api/analytics/track',
+      'GET /api/analytics/dashboard',
+      'GET /api/payments/plans',
+      'GET /api/payments/history',
       'POST /api/payments/initialize'
     ]
   });
@@ -148,6 +163,10 @@ mongoose.connect(process.env.MONGO_URI, {
 .then(() => {
   console.log('✅ MongoDB connected successfully');
   console.log('📊 Database:', mongoose.connection.db.databaseName);
+  
+  // Start scheduled cleanup jobs after DB connection
+  const { startScheduledCleanup } = require('./utils/cleanup');
+  startScheduledCleanup();
 })
 .catch(err => {
   console.error('❌ MongoDB connection error:', err);

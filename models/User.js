@@ -40,6 +40,17 @@ const userSchema = new mongoose.Schema({
     default: null
   },
   // ---------------------------------
+  // Guest user fields (for "try before login" flow)
+  isGuest: {
+    type: Boolean,
+    default: false
+  },
+  guestDeviceId: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
+  // ---------------------------------
   isPro: {
     type: Boolean,
     default: false
@@ -91,6 +102,47 @@ const userSchema = new mongoose.Schema({
       type: Boolean,
       default: true
     }
+  },
+  // Streak tracking for daily engagement
+  streak: {
+    currentStreak: {
+      type: Number,
+      default: 0
+    },
+    longestStreak: {
+      type: Number,
+      default: 0
+    },
+    lastStreakDate: {
+      type: Date,
+      default: null
+    }
+  },
+  // Rewarded ads tracking for daily caps
+  rewardedAds: {
+    lastRewardDate: {
+      type: Date,
+      default: null
+    },
+    rewardsToday: {
+      type: Number,
+      default: 0
+    }
+  },
+  // Onboarding state
+  onboarding: {
+    version: {
+      type: Number,
+      default: 0
+    },
+    completedAt: {
+      type: Date,
+      default: null
+    },
+    skippedAt: {
+      type: Date,
+      default: null
+    }
   }
 }, {
   timestamps: true
@@ -100,6 +152,7 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ email: 1 });
 userSchema.index({ googleId: 1 });
 userSchema.index({ referralCode: 1 }); // 3. Added index for referral code
+userSchema.index({ guestDeviceId: 1 }); // Guest device lookup
 userSchema.index({ 'subscription.paystackCustomerCode': 1 });
 
 // --- 4. ADDED PRE-SAVE HOOK TO GENERATE REFERRAL CODE ---

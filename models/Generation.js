@@ -14,7 +14,7 @@ const generationSchema = new mongoose.Schema({
   originalImage: {
     url: {
       type: String,
-      required: true
+      required: false
     },
     publicId: String
   },

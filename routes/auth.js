@@ -3,6 +3,9 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 const Analytics = require('../models/Analytics');
+const { sendWelcomePush } = require('../services/campaignService');
+const { authLimit, rewardLimit, guestLimit } = require('../middleware/rateLimit');
+const Generation = require('../models/Generation');
 
 const router = express.Router();
 
@@ -48,18 +51,97 @@ const sendTokenResponse = (user, statusCode, res, message = 'Success') => {
     });
 };
 
+// @desc    Create guest session (try before login)
+// @route   POST /api/auth/guest
+// @access  Public (rate-limited)
+router.post('/guest', guestLimit, async (req, res, next) => {
+  try {
+    const { deviceId } = req.body;
+
+    if (!deviceId || deviceId.length < 10) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Valid deviceId is required'
+      });
+    }
+
+    // Check if guest already exists for this device
+    let user = await User.findOne({ guestDeviceId: deviceId });
+
+    if (user) {
+      // Return existing guest session
+      user.lastLogin = new Date();
+      await user.save();
+
+      await Analytics.trackEvent('guest_session_resumed', {
+        deviceId: deviceId.slice(0, 8) + '...'
+      }, user._id);
+
+      return sendTokenResponse(user, 200, res, 'Guest session resumed');
+    }
+
+    // Create new guest user with 1 free credit
+    const { nanoid } = await import('nanoid');
+    const guestId = nanoid(8);
+    
+    user = await User.create({
+      email: `guest_${guestId}@guest.local`,
+      name: `Guest ${guestId.slice(0, 4)}`,
+      isGuest: true,
+      guestDeviceId: deviceId,
+      credits: 1, // Only 1 credit for guests (cost control)
+      freeTrialUsed: 0,
+      freeTrialExpiry: null, // No trial for guests
+      lastLogin: new Date(),
+      isActive: true
+    });
+
+    await Analytics.trackEvent('guest_session_created', {
+      deviceId: deviceId.slice(0, 8) + '...',
+      credits: 1
+    }, user._id);
+
+    sendTokenResponse(user, 201, res, 'Guest session created! Sign in to get 5 free credits.');
+  } catch (error) {
+    // Handle duplicate key error (race condition)
+    if (error.code === 11000) {
+      const user = await User.findOne({ guestDeviceId: req.body.deviceId });
+      if (user) {
+        return sendTokenResponse(user, 200, res, 'Guest session resumed');
+      }
+    }
+    next(error);
+  }
+});
+
 // @desc    Google OAuth login/register
 // @route   POST /api/auth/google
 // @access  Public
 router.post('/google', async (req, res, next) => {
   try {
-    const { googleId, email, name, avatar,referralCode } = req.body;
+    const { googleId, email, name, avatar, referralCode, guestToken } = req.body;
 
     if (!googleId || !email || !name) {
       return res.status(400).json({
         status: 'error',
         message: 'Please provide googleId, email, and name'
       });
+    }
+
+    // Check if there's a guest user to migrate
+    let guestUser = null;
+    if (guestToken) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(guestToken, process.env.JWT_SECRET);
+        const potentialGuest = await User.findById(decoded.id);
+        if (potentialGuest && potentialGuest.isGuest) {
+          guestUser = potentialGuest;
+        }
+      } catch (err) {
+        // Invalid guest token, ignore and continue
+        console.log('Invalid guest token during Google login, ignoring');
+      }
     }
 
     let user = await User.findOne({ 
@@ -72,8 +154,29 @@ router.post('/google', async (req, res, next) => {
       user.name = name;
       user.avatar = avatar;
       user.isActive = true;
+      user.isGuest = false; // Ensure not marked as guest
       user.lastLogin = new Date();
       await user.save();
+
+      // Migrate guest generations if applicable
+      if (guestUser && guestUser._id.toString() !== user._id.toString()) {
+        await Generation.updateMany(
+          { user: guestUser._id },
+          { user: user._id }
+        );
+        // Transfer any remaining credits from guest
+        if (guestUser.credits > 0) {
+          user.credits += guestUser.credits;
+          await user.save();
+        }
+        // Delete the guest user
+        await User.findByIdAndDelete(guestUser._id);
+        await Analytics.trackEvent('guest_migrated', {
+          guestId: guestUser._id,
+          realUserId: user._id,
+          generationsMigrated: true
+        }, user._id);
+      }
 
       // Track login
       await Analytics.trackEvent('user_signed_in', {
@@ -83,15 +186,39 @@ router.post('/google', async (req, res, next) => {
 
       sendTokenResponse(user, 200, res, 'Welcome back!');
     } else {
-      // Create new user
-      user = await User.create({
-        googleId,
-        email,
-        name,
-        avatar,
-        lastLogin: new Date(),
-        isActive:true
-      });
+      // Create new user (migrate from guest if applicable)
+      if (guestUser) {
+        // Convert guest to real user
+        guestUser.googleId = googleId;
+        guestUser.email = email;
+        guestUser.name = name;
+        guestUser.avatar = avatar;
+        guestUser.isGuest = false;
+        guestUser.guestDeviceId = null;
+        guestUser.lastLogin = new Date();
+        guestUser.isActive = true;
+        // Give them full signup credits (5) if they only had guest credits (1)
+        if (guestUser.credits <= 1) {
+          guestUser.credits = 5;
+        }
+        await guestUser.save();
+        user = guestUser;
+
+        await Analytics.trackEvent('guest_converted', {
+          userId: user._id,
+          method: 'google'
+        }, user._id);
+      } else {
+        // Brand new user
+        user = await User.create({
+          googleId,
+          email,
+          name,
+          avatar,
+          lastLogin: new Date(),
+          isActive: true
+        });
+      }
 
 
 if (referralCode) {
@@ -128,6 +255,9 @@ if (referralCode) {
         trial_credits: user.credits
       }, user._id);
 
+      // Send welcome push notification (async, don't await)
+      sendWelcomePush(user._id);
+
       sendTokenResponse(user, 201, res, 'Account created successfully!');
     }
   } catch (error) {
@@ -141,6 +271,12 @@ if (referralCode) {
 router.get('/me', protect, async (req, res, next) => {
   try {
     const user = await User.findById(req.user.id);
+
+    // Calculate derived fields for mobile gating
+    const now = new Date();
+    const isTrialActive = user.freeTrialExpiry && new Date(user.freeTrialExpiry) > now;
+    const isSubscriptionActive = user.subscription?.status === 'active';
+    const canGenerate = user.credits > 0 || user.isPro || isSubscriptionActive;
 
     res.status(200).json({
       status: 'success',
@@ -157,7 +293,15 @@ router.get('/me', protect, async (req, res, next) => {
           subscription: user.subscription,
           freeTrialExpiry: user.freeTrialExpiry,
           lastLogin: user.lastLogin,
-          createdAt: user.createdAt
+          createdAt: user.createdAt,
+          // Additional fields for mobile gating
+          referralCode: user.referralCode,
+          isGuest: user.isGuest || false,
+          isTrialActive,
+          isSubscriptionActive,
+          canGenerate,
+          streak: user.streak || { currentStreak: 0, longestStreak: 0, lastActivityDate: null },
+          rewardedAds: user.rewardedAds || { rewardsToday: 0, lastRewardDate: null }
         }
       }
     });
@@ -196,28 +340,124 @@ router.put('/profile', protect, async (req, res, next) => {
 
 
 
-// Get payments reward ads 
-router.post('/reward_ad', protect, async (req, res, next) => {
-  try {
+// Get payments reward ads with daily cap
+// Config: max 4 rewards per day (2 credits total)
+const REWARD_AD_CONFIG = {
+  creditsPerReward: 0.5,
+  maxRewardsPerDay: 4,
+  maxCreditsPerDay: 2
+};
 
-   const user = await User.findById(
-      req.user.id
-      )
-   if (!user){
+// Apply reward rate limit to prevent abuse
+router.post('/reward_ad', protect, rewardLimit, async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    if (!user) {
       return res.status(400).json({
         status: 'error',
         message: 'No user found'
       });
+    }
 
-   }
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // Initialize rewardedAds if not exists
+    if (!user.rewardedAds) {
+      user.rewardedAds = { lastRewardDate: null, rewardsToday: 0 };
+    }
+    
+    // Check if last reward was on a different day - reset counter
+    const lastRewardDate = user.rewardedAds.lastRewardDate;
+    if (!lastRewardDate || new Date(lastRewardDate) < today) {
+      user.rewardedAds.rewardsToday = 0;
+    }
+    
+    // Check daily cap
+    if (user.rewardedAds.rewardsToday >= REWARD_AD_CONFIG.maxRewardsPerDay) {
+      // Track denied event
+      const Analytics = require('../models/Analytics');
+      await Analytics.trackEvent('reward_ad_denied', {
+        reason: 'daily_cap_reached',
+        rewardsToday: user.rewardedAds.rewardsToday
+      }, user._id);
+      
+      return res.status(429).json({
+        status: 'error',
+        message: 'Daily reward limit reached. Come back tomorrow!',
+        data: {
+          rewardsToday: user.rewardedAds.rewardsToday,
+          maxRewardsPerDay: REWARD_AD_CONFIG.maxRewardsPerDay,
+          remainingRewards: 0
+        }
+      });
+    }
+    
+    // Grant reward
+    user.credits += REWARD_AD_CONFIG.creditsPerReward;
+    user.rewardedAds.rewardsToday += 1;
+    user.rewardedAds.lastRewardDate = now;
+    await user.save();
+    
+    // Track granted event
+    const Analytics = require('../models/Analytics');
+    await Analytics.trackEvent('reward_ad_granted', {
+      creditsGranted: REWARD_AD_CONFIG.creditsPerReward,
+      rewardsToday: user.rewardedAds.rewardsToday,
+      totalCredits: user.credits
+    }, user._id);
 
-    user.credits = user.credits+0.5;
-    user.save();
-
-   res.status(200).json({
+    res.status(200).json({
       status: 'success',
-      message: '0.5 Credit added successfully',
-      data: { user }
+      message: `${REWARD_AD_CONFIG.creditsPerReward} Credit added successfully`,
+      data: {
+        user,
+        rewardsToday: user.rewardedAds.rewardsToday,
+        maxRewardsPerDay: REWARD_AD_CONFIG.maxRewardsPerDay,
+        remainingRewards: REWARD_AD_CONFIG.maxRewardsPerDay - user.rewardedAds.rewardsToday,
+        creditsPerReward: REWARD_AD_CONFIG.creditsPerReward
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get reward ad status (remaining rewards today)
+// @route   GET /api/auth/reward_ad/status
+// @access  Private
+router.get('/reward_ad/status', protect, async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+    
+    if (!user) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'No user found'
+      });
+    }
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // Check if last reward was on a different day - rewards reset
+    let rewardsToday = user.rewardedAds?.rewardsToday || 0;
+    const lastRewardDate = user.rewardedAds?.lastRewardDate;
+    
+    if (!lastRewardDate || new Date(lastRewardDate) < today) {
+      rewardsToday = 0;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        rewardsToday,
+        maxRewardsPerDay: REWARD_AD_CONFIG.maxRewardsPerDay,
+        remainingRewards: REWARD_AD_CONFIG.maxRewardsPerDay - rewardsToday,
+        creditsPerReward: REWARD_AD_CONFIG.creditsPerReward,
+        maxCreditsPerDay: REWARD_AD_CONFIG.maxCreditsPerDay
+      }
     });
   } catch (error) {
     next(error);

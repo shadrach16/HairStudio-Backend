@@ -114,4 +114,69 @@ router.get('/stats', protect, async (req, res) => {
   }
 });
 
+// Complete onboarding
+router.post('/onboarding/complete', protect, async (req, res) => {
+  try {
+    const { version = 1, skipped = false } = req.body;
+    const user = req.user;
+
+    // Only update if this is a newer version or not yet completed
+    if (!user.onboarding || user.onboarding.version < version) {
+      user.onboarding = {
+        version,
+        completedAt: skipped ? null : new Date(),
+        skippedAt: skipped ? new Date() : null
+      };
+      await user.save();
+
+      // Track onboarding completion
+      await trackEvent('onboarding_completed', {
+        userId: user._id,
+        version,
+        skipped
+      });
+    }
+
+    res.json({
+      success: true,
+      message: skipped ? 'Onboarding skipped' : 'Onboarding completed',
+      data: {
+        onboarding: user.onboarding
+      }
+    });
+
+  } catch (error) {
+    console.error('Complete onboarding error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update onboarding status'
+    });
+  }
+});
+
+// Get onboarding status
+router.get('/onboarding/status', protect, async (req, res) => {
+  try {
+    const user = req.user;
+    const CURRENT_VERSION = 1;
+
+    res.json({
+      success: true,
+      data: {
+        hasCompleted: user.onboarding?.completedAt != null,
+        hasSkipped: user.onboarding?.skippedAt != null,
+        version: user.onboarding?.version || 0,
+        needsOnboarding: !user.onboarding?.version || user.onboarding.version < CURRENT_VERSION
+      }
+    });
+
+  } catch (error) {
+    console.error('Get onboarding status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get onboarding status'
+    });
+  }
+});
+
 module.exports = router;

@@ -212,6 +212,54 @@ router.get('/popular/:limit?', async (req, res, next) => {
   }
 });
 
+// @desc    Get featured hairstyles for mobile quick picks
+// @route   GET /api/hairstyles/featured
+// @access  Public
+router.get('/featured', async (req, res, next) => {
+  try {
+    // Get a mix of popular, new, and affordable styles for quick mobile browsing
+    const [popular, newest, affordable] = await Promise.all([
+      // Top 4 popular
+      Hairstyle.find({ isActive: true })
+        .sort({ popularity: -1 })
+        .limit(4)
+        .select('_id name thumbnail price category gender tags'),
+      // 4 newest
+      Hairstyle.find({ isActive: true })
+        .sort({ createdAt: -1 })
+        .limit(4)
+        .select('_id name thumbnail price category gender tags'),
+      // 4 affordable (price 1-2)
+      Hairstyle.find({ isActive: true, price: { $lte: 2 } })
+        .sort({ popularity: -1 })
+        .limit(4)
+        .select('_id name thumbnail price category gender tags')
+    ]);
+
+    // Deduplicate by ID
+    const seen = new Set();
+    const dedupe = (arr) => arr.filter(h => {
+      const id = h._id.toString();
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+
+    const featured = {
+      trending: dedupe(popular),
+      newArrivals: dedupe(newest),
+      budgetFriendly: dedupe(affordable)
+    };
+
+    res.status(200).json({
+      status: 'success',
+      data: featured
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // @desc    Get hairstyle categories
 // @route   GET /api/hairstyles/meta/categories
 // @access  Public
