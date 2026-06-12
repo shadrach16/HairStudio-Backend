@@ -25,6 +25,9 @@ const paymentRoutes = require('./routes/payments');
 const favoriteRoutes = require('./routes/favorites');
 const streakRoutes = require('./routes/streaks');
 const pushRoutes = require('./routes/push');
+const savedLooksRoutes = require('./routes/savedLooks');
+const collectionRoutes = require('./routes/collections');
+const p2cRoutes = require('./routes/p2c'); // Photo2Calendar proxy (isolated)
 
 
 const app = express();
@@ -121,6 +124,9 @@ app.use('/api/favorites', favoriteRoutes);
 app.use('/api/streaks', streakRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/watermark', watermarkRoutes);
+app.use('/api/saved-looks', savedLooksRoutes);
+app.use('/api/collections', collectionRoutes);
+app.use('/api/p2c', p2cRoutes); // Photo2Calendar proxy (isolated)
 
 // Root endpoint
 app.get('/', (req, res) => {
