@@ -7,17 +7,42 @@ const Hairstyle = require('../models/Hairstyle');
 const User = require('../models/User');
 const {protect} = require('../middleware/auth');
 const { trackEvent } = require('../utils/analytics');
-const { low_cut,standard_prompt, analysis_prompt } = require('../prompts/all_prompts');
+const { analysis_prompt } = require('../prompts/all_prompts');
+const { buildPrompt, buildEditPrompt, PROMPT_VERSION } = require('../prompts/promptFamilies');
+const { validateInput } = require('../services/inputGate');
+const { analyzeHairRegion } = require('../services/hairMask');
+const { scoreOutput, QUALITY_CONFIG } = require('../services/outputQuality');
 const fs = require('fs');
 const path = require('path');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const { generationLimit } = require('../middleware/rateLimit');
+const subscriptionService = require('../services/subscriptionService');
+const creditLedger = require('../services/creditLedger');
 
 const router = express.Router();
 
-const ai = new GoogleGenAI({
-    apiKey:  process.env.GEMINI_API_KEY,
-  });
+// Gemini key pool: set GEMINI_API_KEY_POOL=key1,key2,... to spread image-gen load
+// across keys (mitigates per-minute quota during bursts). Falls back to GEMINI_API_KEY.
+const GEMINI_KEYS = (process.env.GEMINI_API_KEY_POOL || process.env.GEMINI_API_KEY || '')
+  .split(',')
+  .map((k) => k.trim())
+  .filter(Boolean);
+
+const geminiClients = GEMINI_KEYS.map((key) => new GoogleGenAI({ apiKey: key }));
+let geminiKeyCursor = 0;
+
+// Round-robin next client (so consecutive calls hit different keys).
+function nextGeminiClient() {
+  if (!geminiClients.length) {
+    throw new Error('No Gemini API key configured (GEMINI_API_KEY / GEMINI_API_KEY_POOL)');
+  }
+  const client = geminiClients[geminiKeyCursor % geminiClients.length];
+  geminiKeyCursor += 1;
+  return client;
+}
+
+// First client kept as `ai` for the existing (text) analyze-hairstyle path.
+const ai = geminiClients[0] || new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 
  function getMimeTypeFromBase64(base64String) {
@@ -38,13 +63,51 @@ const upload = multer({
 
 const HAIRSTYLE_ANALYSIS_PROMPT = analysis_prompt()
 
+function parseRetryDelayMs(errorMessage = '') {
+  const match = String(errorMessage).match(/Please retry in\s+([\d.]+)s/i);
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.ceil(seconds * 1000);
+}
+
+function isQuotaError(errorMessage = '') {
+  const msg = String(errorMessage);
+  return /RESOURCE_EXHAUSTED|Too Many Requests|Quota exceeded|status:\s*429/i.test(msg);
+}
+
+async function refundGenerationCredits({ userId, generation, amount, reason, metadata = {} }) {
+  const refundResult = await creditLedger.creditUser({
+    userId,
+    amount,
+    kind: 'refund',
+    source: 'generation_failure',
+    reason,
+    description: 'Automatic refund after generation failure',
+    reference: {
+      generation: generation._id,
+      correlationId: String(generation._id)
+    },
+    metadata
+  });
+
+  generation.ledger = {
+    ...(generation.ledger || {}),
+    refundTransaction: refundResult.transaction._id,
+    refundReason: reason,
+    refundedAt: new Date()
+  };
+
+  return refundResult;
+}
+
 
 
 
 // New helper function for Gemini Hairstyle Analysis (similar to your existing one)
 async function analyzeHairstyleWithGemini(imageBuffer, mimeType) {
   try {
-    const model = 'gemini-2.5-flash';
+    const model = 'gemini-3-flash-preview';
     const imagePart = {
       inlineData: {
         data: imageBuffer.toString('base64'),
@@ -61,13 +124,42 @@ async function analyzeHairstyleWithGemini(imageBuffer, mimeType) {
     });
 
 
-    return  response.candidates[0].content.parts[0].text
+    const text = response?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) throw new Error('AI analysis returned no text result');
+    return text;
 
   } catch (error) {
     console.error('Gemini Hairstyle Analysis Error:', error);
     throw new Error('AI analysis service failed.');
   }
 }
+
+
+// --- A3: Standalone input validation endpoint ---
+// @desc    Validate a selfie before generation (no credits consumed)
+// @route   POST /api/generations/validate-input
+// @access  Protected
+router.post('/validate-input', protect, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image provided.' });
+    }
+
+    const mimeType = req.file.mimetype;
+    const result = await validateInput(req.file.buffer, mimeType);
+
+    return res.status(result.passed ? 200 : 422).json({
+      success: result.passed,
+      score: result.score,
+      stage: result.stage,
+      issues: result.issues,
+      suggestion: result.suggestion,
+    });
+  } catch (error) {
+    console.error('Input validation error:', error);
+    return res.status(500).json({ success: false, message: 'Validation service error.' });
+  }
+});
 
 
 // --- 🌟 UPDATED ROUTE: Analyze & Generate Custom Hairstyle ---
@@ -108,12 +200,24 @@ const hairstyleFile = files.hairstyleImage[0];
           return res.status(400).json({ success: false, message: 'Insufficient credits. Requires 3 credits.' });
         }
 
-        // 2. Perform AI analysis
-        const ai_description = await analyzeHairstyleWithGemini(hairstyleImageBuffer, hairstyleMimeType);
-        
-        // 3. Upload the original Hairstyle image to Cloudinary (for thumbnail/reference)
-        // NOTE: uploadToCloudinary must support taking a Buffer as input
-        const originalImageUpload = await uploadToCloudinary(hairstyleImageBuffer, 'custom_hairstyles');
+        // A3: Input gate on user's selfie photo, BEFORE consuming credits
+        const gateResult = await validateInput(userPhotoBuffer, userPhotoMimeType);
+        if (!gateResult.passed) {
+          return res.status(422).json({
+            success: false,
+            code: 'INPUT_GATE_FAILED',
+            message: gateResult.suggestion || 'Your selfie does not meet quality requirements.',
+            issues: gateResult.issues,
+            score: gateResult.score,
+          });
+        }
+
+        // A3: Analyze hair region + perform AI hairstyle analysis in parallel
+        const [maskResult, ai_description, originalImageUpload] = await Promise.all([
+          analyzeHairRegion(userPhotoBuffer, userPhotoMimeType),
+          analyzeHairstyleWithGemini(hairstyleImageBuffer, hairstyleMimeType),
+          uploadToCloudinary(hairstyleImageBuffer, 'custom_hairstyles'),
+        ]);
 
         // 4. Create the new Hairstyle record
         const newHairstyle = new Hairstyle({
@@ -140,6 +244,20 @@ const hairstyleFile = files.hairstyleImage[0];
           'originalImage.publicId': originalUserPhotoUpload.public_id,
             creditsUsed: CUSTOM_STYLE_PRICE,
             status: 'processing',
+            // A3: Input gate and mask data
+            inputGate: {
+              passed: gateResult.passed,
+              score: gateResult.score,
+              stage: gateResult.stage,
+              issues: gateResult.issues || [],
+            },
+            maskData: maskResult.success ? {
+              hairRegion: maskResult.hairRegion,
+              currentHairState: maskResult.currentHairState,
+              hairlineBoundary: maskResult.hairlineBoundary,
+              obstructions: maskResult.obstructions,
+              editDifficulty: maskResult.editDifficulty,
+            } : undefined,
             metadata: {
                 userAgent: req.get('User-Agent'),
                 ipAddress: req.ip,
@@ -150,7 +268,28 @@ const hairstyleFile = files.hairstyleImage[0];
         await generation.save();
 
         // 6. Deduct Credits & Respond to Client
-        await user.useCredits(CUSTOM_STYLE_PRICE);
+        const customSpend = await creditLedger.debitUser({
+          userId: user._id,
+          amount: CUSTOM_STYLE_PRICE,
+          kind: 'spend',
+          source: 'custom_generation',
+          reason: 'Custom hairstyle generation charge',
+          description: 'Credit spend for custom hairstyle analysis and generation',
+          reference: {
+            generation: generation._id,
+            correlationId: String(generation._id)
+          },
+          metadata: {
+            hairstyleId: newHairstyle._id,
+            deviceType: generation.metadata?.deviceType || 'unknown'
+          }
+        });
+
+        generation.ledger = {
+          ...(generation.ledger || {}),
+          spendTransaction: customSpend.transaction._id
+        };
+        await generation.save();
    
 
         res.json({
@@ -162,115 +301,256 @@ const hairstyleFile = files.hairstyleImage[0];
             }
         });
 
-        // 7. Process generation asynchronously 
+        // 7. Process generation asynchronously with A4 quality scoring & auto-retry
         (async () => {
             const creditsCharged = CUSTOM_STYLE_PRICE;
+            const maxAttempts = 1 + QUALITY_CONFIG.maxRetries;
+            let attempt = 0;
+            let lastResult = null;
+            let lastQuality = null;
+
             try {
                 const originalImageForGeneration = userPhotoBuffer;
                 const originalMimeTypeForGeneration = userPhotoMimeType;
 
-                const result = await generateHairstyleWithGemini(
-                    originalImageForGeneration, 
-                    newHairstyle, 
-                    originalMimeTypeForGeneration
-                ); 
-                
-                if (result.success) {
+                while (attempt < maxAttempts) {
+                  attempt++;
+                  generation.retryCount = attempt - 1;
+
+                  const result = await generateHairstyleWithGemini(
+                      originalImageForGeneration,
+                      newHairstyle,
+                      originalMimeTypeForGeneration,
+                      maskResult.success ? maskResult : null,
+                      'standard'
+                  );
+
+                  if (result.promptMeta) {
+                    generation.prompt = result.promptMeta;
+                  }
+
+                  if (!result.success) {
+                    lastResult = result;
+                    if (result.code === 'QUOTA_EXCEEDED') {
+                      console.log('A4 custom: quota exceeded, skipping additional retries.');
+                      break;
+                    }
+                    if (attempt < maxAttempts) continue;
+                    break;
+                  }
+
+                  // A4: Score output quality
+                  const originalBase64 = originalImageForGeneration.toString('base64');
+                  const qualityResult = await scoreOutput(
+                    originalBase64, originalMimeTypeForGeneration,
+                    result.imageData, result.mimeType,
+                    generation.generationMode || 'standard'
+                  );
+                  lastQuality = qualityResult;
+                  lastResult = result;
+
+                  generation.qualityScore = {
+                    score: qualityResult.score,
+                    passed: qualityResult.passed,
+                    threshold: qualityResult.threshold,
+                    analysis: qualityResult.analysis || {},
+                    defect: qualityResult.defect,
+                    defectSeverity: qualityResult.defectSeverity,
+                    scoredAt: new Date(),
+                  };
+
+                  if (qualityResult.passed) {
                     const generatedImageUrl = `data:${result.mimeType};base64,${result.imageData}`;
-                    // Upload the GENERATED image to Cloudinary
                     const generatedImageUpload = await uploadToCloudinary(generatedImageUrl, 'generated_images');
 
-                    // Update the generation record with the Cloudinary URL
                     generation.status = 'completed';
                     generation.generatedImage = {
                         url: generatedImageUpload.secure_url,
                         publicId: generatedImageUpload.public_id,
                     };
                     await generation.save();
-
-                    // Increment generation count on the Hairstyle (as it was successful)
                     await newHairstyle.incrementGeneration();
-                    
-                    
+                    return;
+                  }
 
+                  if (attempt < maxAttempts) {
+                    console.log(`A4 custom: Quality ${qualityResult.score} < ${qualityResult.threshold}, retrying...`);
+                    continue;
+                  }
+                }
+
+                // All attempts exhausted
+                if (lastResult?.success && lastQuality) {
+                  const generatedImageUrl = `data:${lastResult.mimeType};base64,${lastResult.imageData}`;
+                  const generatedImageUpload = await uploadToCloudinary(generatedImageUrl, 'generated_images');
+                  generation.status = 'completed';
+                  generation.generatedImage = {
+                      url: generatedImageUpload.secure_url,
+                      publicId: generatedImageUpload.public_id,
+                  };
+                  generation.errorMessage = `Quality below threshold (score: ${lastQuality.score}). ${lastQuality.defect || ''}`.trim();
+                  await generation.save();
+                  await newHairstyle.incrementGeneration();
                 } else {
-                    generation.status = 'failed';
-                    generation.errorMessage = String(result.error.message || 'AI generation failed').slice(0, 255);
-                    // CRITICAL: Refund credits on failure
-                    await user.addCredits(creditsCharged);
-                    await generation.save();
-
-                   
+                  generation.status = 'failed';
+                  generation.errorMessage = (
+                    lastResult?.code === 'QUOTA_EXCEEDED'
+                      ? 'AI service quota reached. Please retry in about a minute.'
+                      : String(lastResult?.error || 'AI generation failed after retries')
+                  ).slice(0, 255);
+                  await refundGenerationCredits({
+                    userId: user._id,
+                    generation,
+                    amount: creditsCharged,
+                    reason: generation.errorMessage,
+                    metadata: { failureStage: 'custom_generation_exhausted', attempts: attempt }
+                  });
+                  await generation.save();
                 }
             } catch (error) {
                 console.error('Async generation processing error:', error);
                 generation.status = 'failed';
                 generation.errorMessage = 'Processing failed: ' + error.message;
-                await user.addCredits(creditsCharged); 
+                await refundGenerationCredits({
+                  userId: user._id,
+                  generation,
+                  amount: creditsCharged,
+                  reason: generation.errorMessage,
+                  metadata: {
+                    failureStage: 'custom_generation_exception'
+                  }
+                });
                 await generation.save();
             }
         })();
 
     } catch (error) {
         console.error('Analyze and Generate failed:', error);
-        res.status(500).json({ success: false, message: error.message || 'Failed to start custom generation.' });
+        return res.status(500).json({ success: false, message: 'An unexpected error occurred during analysis.' });
     }
 });
 
-
- async function generateHairstyleWithGemini(imageBuffer, hairstyle,mimeType) {
+ async function generateHairstyleWithGemini(imageBuffer, hairstyle, mimeType, maskData = null, generationMode = 'standard') {
   try {
     const base64Image = imageBuffer.toString('base64');
-    let prompt_text = null;
 
-    switch (hairstyle.category) {
-    case 'Default':
-        prompt_text = low_cut(hairstyle.ai_description);
-        break;  
-    default:
-        prompt_text = standard_prompt(hairstyle.ai_description);
-        break;  
-  }
+    // A3: Use edit-centric prompt if mask data is available, else standard
+    let promptResult;
+    if (maskData && maskData.hairRegion) {
+      promptResult = buildEditPrompt(
+        hairstyle.ai_description,
+        hairstyle.attributes || {},
+        hairstyle.category,
+        maskData
+      );
+    } else {
+      promptResult = buildPrompt(
+        hairstyle.ai_description,
+        hairstyle.attributes || {},
+        hairstyle.category
+      );
+    }
+    const { promptText, promptFamily, promptVersion } = promptResult;
 
+    // Tiered model selection: standard → 2.5 Flash Image, HD → 3.1 Flash Image, Pro → 3 Pro Image
+    const modeConfig = MODE_PRICING[generationMode] || MODE_PRICING.standard;
+    const generationModel = modeConfig.model;
 
     const prompt = [
-      { 
-        text: prompt_text
-      },
+      { text: promptText },
       {
         inlineData: {
-          mimeType: mimeType, 
+          mimeType: mimeType,
           data: base64Image,
         },
       },
     ];
 
- const response = await ai.models.generateContent({
-   model: "gemini-2.5-flash-image" , //gemini-2.5-flash-image
-      contents: prompt,
-    });
+    const promptMeta = { family: promptFamily, version: promptVersion, model: generationModel };
 
-    // Extract the generated image from response
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
+    // Try across the Gemini key pool with backoff on quota. At least 2 tries so even a
+    // single key gets one retry-after-wait when it hits a per-minute quota (the cause of
+    // ~34% of past generation failures, which were being refunded instead of retried).
+    const maxKeyTries = Math.max(geminiClients.length, 2);
+    let lastQuotaMessage = null;
+
+    for (let i = 0; i < maxKeyTries; i++) {
+      const client = nextGeminiClient();
+      try {
+        const response = await client.models.generateContent({
+          model: generationModel,
+          contents: prompt,
+        });
+
+        // Extract the generated image from the response
+        const parts = response?.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
+            return {
+              success: true,
+              imageData: part.inlineData.data,
+              mimeType: part.inlineData.mimeType,
+              promptMeta,
+            };
+          }
+        }
+
+        // No image part — capture WHY (safety block vs empty) for diagnostics.
+        const blockReason = response?.promptFeedback?.blockReason || null;
+        const finishReason = response?.candidates?.[0]?.finishReason || null;
+        console.warn(`[gemini] no image (model=${generationModel}) blockReason=${blockReason || 'none'} finishReason=${finishReason || 'none'}`);
         return {
-          success: true,
-          imageData: part.inlineData.data,
-          mimeType: part.inlineData.mimeType
+          success: false,
+          error: blockReason ? `No image — request blocked (${blockReason})` : 'No image generated in response',
+          code: blockReason ? 'NO_IMAGE_BLOCKED' : 'NO_IMAGE',
+          blockReason,
+          finishReason,
+          promptMeta,
         };
+      } catch (error) {
+        const message = error?.message || 'AI generation request failed';
+        if (isQuotaError(message)) {
+          lastQuotaMessage = message;
+          if (i < maxKeyTries - 1) {
+            const waitMs = Math.min(parseRetryDelayMs(message) || 2000, 15000);
+            console.warn(`[gemini] quota hit (try ${i + 1}/${maxKeyTries}) — rotating key, waiting ${waitMs}ms`);
+            await new Promise((r) => setTimeout(r, waitMs));
+            continue;
+          }
+          break; // pool exhausted
+        }
+        // Non-quota API error — surface (the caller's outer loop may still retry).
+        console.error('Gemini AI generation error:', error);
+        return { success: false, error: message, code: 'GENERATION_FAILED' };
       }
     }
 
-
-    throw new Error('No image generated in response');
-  } catch (error) {
-    console.error('Gemini AI generation error:', error);
     return {
       success: false,
-      error: error.message
+      error: lastQuotaMessage || 'AI generation failed',
+      code: 'QUOTA_EXCEEDED',
+      retryAfterMs: parseRetryDelayMs(lastQuotaMessage || ''),
+    };
+  } catch (error) {
+    console.error('Gemini AI generation error:', error);
+    const message = error?.message || 'AI generation request failed';
+    const quotaExceeded = isQuotaError(message);
+    return {
+      success: false,
+      error: message,
+      code: quotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED',
+      retryAfterMs: quotaExceeded ? parseRetryDelayMs(message) : null,
     };
   }
 }
+
+
+// A4: Generation mode pricing multipliers and model selection
+const MODE_PRICING = {
+  standard: { multiplier: 1, label: 'Standard', model: 'gemini-2.5-flash-image' },
+  hd:       { multiplier: 2, label: 'HD',       model: 'gemini-3.1-flash-image-preview' },
+  pro:      { multiplier: 3, label: 'Pro',      model: 'gemini-3-pro-image-preview' },
+};
 
 
 // Generate hairstyle (Standard Hairstyle Generation)
@@ -284,7 +564,10 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
   }
 
   try {
-    const { hairstyleId,mimeType } = req.body;
+    const { hairstyleId, mimeType, generationMode: reqMode } = req.body;
+    // A4: Validate generation mode
+    const generationMode = ['standard', 'hd', 'pro'].includes(reqMode) ? reqMode : 'standard';
+    const modeConfig = MODE_PRICING[generationMode];
     const user = req.user;
 
     if (!req.file) {
@@ -297,16 +580,69 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
       return res.status(404).json({ success: false, message: 'Hairstyle not found' });
     }
 
+    // C3: Auto-refresh subscription credits if cycle is due
+    if (user.hasActiveSubscription && user.hasActiveSubscription()) {
+      try {
+        const refreshResult = await subscriptionService.refreshSubscriptionCycle({
+          userId: user._id,
+          now: new Date()
+        });
+        if (refreshResult.refreshed) {
+          // Reload user with updated credits
+          const freshUser = await User.findById(user._id);
+          Object.assign(user, freshUser.toObject());
+        }
+      } catch (refreshErr) {
+        console.error('Auto-refresh subscription failed:', refreshErr.message);
+      }
+    }
+
+    // C3: Block generation if subscription is expired and no credits
+    if (user.subscription?.status === 'expired') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your subscription has expired. Please renew to continue generating.',
+        code: 'SUBSCRIPTION_EXPIRED'
+      });
+    }
+
     if (user.credits < hairstyle.price) {
       return res.status(400).json({ success: false, message: 'Insufficient credits' });
     }
+
+    // A4: Calculate actual cost based on generation mode
+    const modeCost = Math.ceil(hairstyle.price * modeConfig.multiplier);
+    if (user.credits < modeCost) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient credits for ${modeConfig.label} mode. Need ${modeCost}, have ${user.credits}.`,
+        code: 'INSUFFICIENT_CREDITS',
+        required: modeCost,
+        mode: generationMode,
+      });
+    }
+
+    // A3: Input gate — validate selfie quality BEFORE consuming credits
+    const gateResult = await validateInput(req.file.buffer, req.file.mimetype);
+    if (!gateResult.passed) {
+      return res.status(422).json({
+        success: false,
+        code: 'INPUT_GATE_FAILED',
+        message: gateResult.suggestion || 'Photo does not meet quality requirements.',
+        issues: gateResult.issues,
+        score: gateResult.score,
+      });
+    }
+
+    // A3: Analyze hair region for edit-centric prompting (runs in parallel with upload)
+    const [maskResult, originalUserPhotoUpload] = await Promise.all([
+      analyzeHairRegion(req.file.buffer, req.file.mimetype),
+      uploadToCloudinary(req.file.buffer, 'original_images'),
+    ]);
     
     // Pre-increment and save (Deducting credit is done right before async call)
     hairstyle.generationCount = hairstyle.generationCount+1
-    await hairstyle.save() 
-
-      // Upload the user's original photo to Cloudinary (avoid storing base64 blobs in MongoDB)
-      const originalUserPhotoUpload = await uploadToCloudinary(req.file.buffer, 'original_images');
+    await hairstyle.save()
 
 
     // 1. Create the generation record 
@@ -315,8 +651,23 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
       hairstyle: hairstyle._id,
       'originalImage.url': originalUserPhotoUpload.secure_url,
       'originalImage.publicId': originalUserPhotoUpload.public_id,
-      creditsUsed: hairstyle.price,
+      creditsUsed: modeCost,
+      generationMode,
       status: 'processing',
+      // A3: Input gate and mask data
+      inputGate: {
+        passed: gateResult.passed,
+        score: gateResult.score,
+        stage: gateResult.stage,
+        issues: gateResult.issues || [],
+      },
+      maskData: maskResult.success ? {
+        hairRegion: maskResult.hairRegion,
+        currentHairState: maskResult.currentHairState,
+        hairlineBoundary: maskResult.hairlineBoundary,
+        obstructions: maskResult.obstructions,
+        editDifficulty: maskResult.editDifficulty,
+      } : undefined,
        metadata: {
         userAgent: req.get('User-Agent'),
         ipAddress: req.ip,
@@ -326,13 +677,35 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
     await generation.save();
 
     // 2. Deduct credits
-    await user.useCredits(hairstyle.price);
+    const spendResult = await creditLedger.debitUser({
+      userId: user._id,
+      amount: modeCost,
+      kind: 'spend',
+      source: 'generation',
+      reason: `Generation charge for ${hairstyle.name} (${modeConfig.label})`,
+      description: 'Credit spend for hairstyle generation',
+      reference: {
+        generation: generation._id,
+        correlationId: String(generation._id)
+      },
+      metadata: {
+        hairstyleId,
+        deviceType: generation.metadata?.deviceType || 'unknown'
+      }
+    });
+
+    generation.ledger = {
+      ...(generation.ledger || {}),
+      spendTransaction: spendResult.transaction._id
+    };
+    await generation.save();
     
      await trackEvent('generation_started', {
       userId: user._id,
       generationId: generation._id,
       hairstyleId,
-      creditsUsed: hairstyle.price
+      creditsUsed: modeCost,
+      generationMode,
     }, req);
 
     res.json({
@@ -340,56 +713,182 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
       data: {
         generationId: generation._id,
         status: 'processing',
+        generationMode,
       }
     });
 
-    // 3. Process generation asynchronously
+    // 3. Process generation asynchronously with A4 quality scoring & auto-retry
     (async () => {
-      const creditsCharged = hairstyle.price;
+      const creditsCharged = modeCost;
+      const modeRetries = QUALITY_CONFIG.modeRetries?.[generationMode] ?? QUALITY_CONFIG.maxRetries;
+      const maxAttempts = 1 + modeRetries;
+      let attempt = 0;
+      let lastResult = null;
+      let lastQuality = null;
+
       try {
-        const result = await generateHairstyleWithGemini(req.file.buffer, hairstyle,mimeType);
-        
-        if (result.success) {
-          const generatedImageUrl = `data:${result.mimeType};base64,${result.imageData}`;
-          
-          // 4. Upload the GENERATED image to Cloudinary
+        while (attempt < maxAttempts) {
+          attempt++;
+          generation.retryCount = attempt - 1;
+
+          const result = await generateHairstyleWithGemini(req.file.buffer, hairstyle, req.file.mimetype, maskResult.success ? maskResult : null, generationMode);
+
+          // A2: Save prompt metadata regardless of outcome
+          if (result.promptMeta) {
+            generation.prompt = result.promptMeta;
+          }
+
+          if (!result.success) {
+            lastResult = result;
+            if (result.code === 'QUOTA_EXCEEDED') {
+              console.log('A4: quota exceeded, skipping additional retries.');
+              break;
+            }
+            // AI generation failed outright — retry if attempts remain
+            if (attempt < maxAttempts) {
+              console.log(`A4: Generation attempt ${attempt} failed, retrying...`);
+              continue;
+            }
+            break;
+          }
+
+          // A4: Score the output quality
+          const originalBase64 = req.file.buffer.toString('base64');
+          const qualityResult = await scoreOutput(
+            originalBase64, req.file.mimetype,
+            result.imageData, result.mimeType,
+            generationMode
+          );
+          lastQuality = qualityResult;
+          lastResult = result;
+
+          // Save quality score to generation record
+          generation.qualityScore = {
+            score: qualityResult.score,
+            passed: qualityResult.passed,
+            threshold: qualityResult.threshold,
+            analysis: qualityResult.analysis || {},
+            defect: qualityResult.defect,
+            defectSeverity: qualityResult.defectSeverity,
+            scoredAt: new Date(),
+          };
+
+          if (qualityResult.passed) {
+            // Quality passed — deliver the result
+            const generatedImageUrl = `data:${result.mimeType};base64,${result.imageData}`;
+            const generatedImageUpload = await uploadToCloudinary(generatedImageUrl, 'generated_images');
+
+            generation.status = 'completed';
+            generation.generatedImage = {
+              url: generatedImageUpload.secure_url,
+              publicId: generatedImageUpload.public_id,
+            };
+            await generation.save();
+
+            await trackEvent('generation_completed', {
+              userId: user._id,
+              generationId: generation._id,
+              hairstyleId,
+              generationMode,
+              qualityScore: qualityResult.score,
+              retryCount: attempt - 1,
+            });
+            return; // Success — exit the async block
+          }
+
+          // Quality failed — retry if attempts remain
+          if (attempt < maxAttempts) {
+            console.log(`A4: Quality score ${qualityResult.score} below threshold ${qualityResult.threshold}, retrying (attempt ${attempt}/${maxAttempts})...`);
+            continue;
+          }
+        }
+
+        // All attempts exhausted
+        if (lastResult?.success && lastQuality) {
+          // We have a generated image but it's below quality threshold
+          // Deliver it anyway (user can see it) but mark with low quality
+          const generatedImageUrl = `data:${lastResult.mimeType};base64,${lastResult.imageData}`;
           const generatedImageUpload = await uploadToCloudinary(generatedImageUrl, 'generated_images');
 
-          // 5. Update the record with the Cloudinary URL
           generation.status = 'completed';
           generation.generatedImage = {
             url: generatedImageUpload.secure_url,
             publicId: generatedImageUpload.public_id,
           };
+          generation.errorMessage = `Quality below ${generationMode} threshold (score: ${lastQuality.score}). ${lastQuality.defect || ''}`.trim();
+
+          // A4: Partial refund for premium modes on low-quality delivery
+          const refundFraction = QUALITY_CONFIG.lowQualityRefundPolicy?.[generationMode] || 0;
+          if (refundFraction > 0) {
+            const refundAmount = Math.ceil(creditsCharged * refundFraction);
+            await refundGenerationCredits({
+              userId: user._id,
+              generation,
+              amount: refundAmount,
+              reason: `Partial refund (${Math.round(refundFraction * 100)}%) — ${generationMode} quality below threshold (score: ${lastQuality.score})`,
+              metadata: {
+                failureStage: 'low_quality_partial_refund',
+                qualityScore: lastQuality.score,
+                defect: lastQuality.defect,
+                generationMode,
+              }
+            });
+          }
           await generation.save();
 
-          // Hairstyle count already incremented and saved
-           await trackEvent('generation_completed', {
+          await trackEvent('generation_completed_low_quality', {
             userId: user._id,
             generationId: generation._id,
             hairstyleId,
-            processingTime: 0
+            generationMode,
+            qualityScore: lastQuality.score,
+            defect: lastQuality.defect,
+            retryCount: attempt - 1,
+            refundFraction,
           });
-
         } else {
+          // Complete failure — no image generated
           generation.status = 'failed';
-          generation.errorMessage = String(result.error.message || 'AI generation failed').slice(0, 255);
-          // CRITICAL: Refund credits on failure
-          await user.addCredits(creditsCharged); 
+          generation.errorMessage = (
+            lastResult?.code === 'QUOTA_EXCEEDED'
+              ? 'AI service quota reached. Please retry in about a minute.'
+              : String(lastResult?.error || 'AI generation failed after retries')
+          ).slice(0, 255);
+          await refundGenerationCredits({
+            userId: user._id,
+            generation,
+            amount: creditsCharged,
+            reason: generation.errorMessage,
+            metadata: {
+              failureStage: 'generation_exhausted',
+              hairstyleId,
+              attempts: attempt,
+            }
+          });
           await generation.save();
-               await trackEvent('generation_failed', {
+
+          await trackEvent('generation_failed', {
             userId: user._id,
             generationId: generation._id,
             hairstyleId,
-            error: result.error
+            error: lastResult?.error,
+            attempts: attempt,
           });
         }
       } catch (error) {
         console.error('Async generation processing error:', error);
         generation.status = 'failed';
         generation.errorMessage = 'Processing failed: ' + error.message;
-        // CRITICAL: Refund credits on processing error
-        await user.addCredits(creditsCharged); 
+        await refundGenerationCredits({
+          userId: user._id,
+          generation,
+          amount: creditsCharged,
+          reason: generation.errorMessage,
+          metadata: {
+            failureStage: 'generation_exception',
+            hairstyleId
+          }
+        });
         await generation.save();
       }
     })();
@@ -427,7 +926,13 @@ router.get('/:id/status', protect, async (req, res) => {
         processingTime: generation.processingTime,
         errorMessage: generation.errorMessage,
         hairstyle: generation.hairstyleId,
-        createdAt: generation.createdAt
+        createdAt: generation.createdAt,
+        // A4: Quality and mode data
+        generationMode: generation.generationMode || 'standard',
+        qualityScore: generation.qualityScore?.score ?? null,
+        qualityPassed: generation.qualityScore?.passed ?? null,
+        qualityDefect: generation.qualityScore?.defect ?? null,
+        retryCount: generation.retryCount || 0,
       }
     });
 
@@ -442,25 +947,73 @@ router.get('/:id/status', protect, async (req, res) => {
 
 
 
-// Get user generations history
+// Get user generations history (with search/filter support)
 router.get('/history', protect, async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 20, status, search, sort = 'newest' } = req.query;
 
-    const generations = await Generation.find({ user: req.user._id })
-      .populate('hairstyle', 'name thumbnail category')
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip((parseInt(page) - 1) * parseInt(limit));
+    const query = { user: req.user._id };
 
-    const total = await Generation.countDocuments({ user: req.user._id });
+    // Filter by status
+    if (status && ['completed', 'failed', 'processing', 'pending'].includes(status)) {
+      query.status = status;
+    }
+
+    // Search by hairstyle name (requires populate pipeline)
+    let sortOrder = { createdAt: -1 };
+    if (sort === 'oldest') sortOrder = { createdAt: 1 };
+
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    let pipeline;
+
+    if (search) {
+      // Use aggregation pipeline for text search across populated fields
+      pipeline = [
+        { $match: query },
+        { $lookup: { from: 'hairstyles', localField: 'hairstyle', foreignField: '_id', as: 'hairstyleData' } },
+        { $unwind: { path: '$hairstyleData', preserveNullAndEmptyArrays: true } },
+        { $match: { $or: [
+          { 'hairstyleData.name': { $regex: search, $options: 'i' } },
+          { 'hairstyleData.category': { $regex: search, $options: 'i' } }
+        ]}},
+        { $sort: sortOrder },
+        { $facet: {
+          data: [{ $skip: skip }, { $limit: limitNum }, { $project: {
+            _id: 1, status: 1, creditsUsed: 1, createdAt: 1, errorMessage: 1,
+            originalImage: 1, generatedImage: 1, rating: 1, feedback: 1,
+            hairstyle: { _id: '$hairstyleData._id', name: '$hairstyleData.name', thumbnail: '$hairstyleData.thumbnail', category: '$hairstyleData.category' }
+          }}],
+          total: [{ $count: 'count' }]
+        }}
+      ];
+      const [result] = await Generation.aggregate(pipeline);
+      const total = result.total[0]?.count || 0;
+      return res.json({
+        success: true,
+        data: result.data,
+        pagination: { current: pageNum, pages: Math.ceil(total / limitNum), total }
+      });
+    }
+
+    // Standard query without search
+    const [generations, total] = await Promise.all([
+      Generation.find(query)
+        .populate('hairstyle', 'name thumbnail category')
+        .sort(sortOrder)
+        .limit(limitNum)
+        .skip(skip),
+      Generation.countDocuments(query)
+    ]);
 
     res.json({
       success: true,
       data: generations,
       pagination: {
-        current: parseInt(page),
-        pages: Math.ceil(total / limit),
+        current: pageNum,
+        pages: Math.ceil(total / limitNum),
         total
       }
     });

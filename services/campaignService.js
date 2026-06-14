@@ -4,6 +4,7 @@
 const User = require('../models/User');
 const PushLog = require('../models/PushLog');
 const PushProvider = require('./pushService');
+const { generateNudges, personalize } = require('./aiNudgeService');
 
 // Campaign configurations with rate limits
 const CAMPAIGNS = {
@@ -63,6 +64,19 @@ const CAMPAIGNS = {
       body: `Hey ${user.name.split(' ')[0]}, it's been a while! Come back and see the new styles we've added.`,
       data: { screen: 'home', action: 'win_back' }
     })
+  },
+  daily_nudge: {
+    maxPerDay: 1,
+    minIntervalHours: 20, // At most one AI nudge per ~day
+    // Message text comes from the AI-generated pool, passed via extra.message.
+    getMessage: (user, extra = {}) => {
+      const base = extra.message || {
+        title: '💇 Time for a new look?',
+        body: 'Try a fresh hairstyle today and see if it suits you!'
+      };
+      const { title, body } = personalize(base, user.name);
+      return { title, body, data: { screen: 'home', action: 'daily_nudge' } };
+    }
   }
 };
 
@@ -211,11 +225,92 @@ async function announceNewDrop(styleName) {
   return { total: users.length, sent };
 }
 
+/**
+ * Find inactive users and send win-back push
+ * (Run periodically, targets users inactive for 5+ days)
+ */
+async function runWinBackCampaign() {
+  console.log('🔄 Running win-back campaign...');
+
+  const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+
+  const users = await User.find({
+    deviceToken: { $exists: true, $ne: null },
+    'preferences.notifications': { $ne: false },
+    lastLogin: { $lt: fiveDaysAgo }
+  }).select('_id').limit(100);
+
+  let sent = 0;
+  for (const user of users) {
+    const result = await sendCampaign(user._id, 'win_back');
+    if (result.success) sent++;
+  }
+
+  console.log(`✅ Win-back pushes sent: ${sent}/${users.length}`);
+  return { total: users.length, sent };
+}
+
+/**
+ * Daily AI-generated re-engagement nudge.
+ * Generates a fresh pool of short messages via Gemini, then sends a random
+ * one to each eligible user. Rate limits ensure at most one per user per day.
+ * (Run once daily via cron — see scripts/sendDailyNudge.js)
+ */
+async function runDailyNudgeCampaign() {
+  console.log('💬 Running daily AI nudge campaign...');
+
+  // Generate the message pool once per run (single AI call, cheap).
+  const pool = await generateNudges(15);
+  console.log(`📝 Nudge pool size: ${pool.length}`);
+
+  const users = await User.find({
+    deviceToken: { $exists: true, $ne: null },
+    'preferences.notifications': { $ne: false }
+  }).select('_id').limit(1000);
+
+  let sent = 0;
+  for (const user of users) {
+    const message = pool[Math.floor(Math.random() * pool.length)];
+    const result = await sendCampaign(user._id, 'daily_nudge', { message });
+    if (result.success) sent++;
+  }
+
+  console.log(`✅ Daily nudges sent: ${sent}/${users.length}`);
+  return { total: users.length, sent, poolSize: pool.length };
+}
+
+/**
+ * Run all scheduled batch campaigns in sequence
+ * Called by the /api/push/cron endpoint or an external scheduler
+ */
+async function runScheduledCampaigns() {
+  const results = {};
+  try {
+    results.streak = await runStreakReminderCampaign();
+  } catch (e) {
+    results.streak = { error: e.message };
+  }
+  try {
+    results.lowCredits = await runLowCreditsCampaign();
+  } catch (e) {
+    results.lowCredits = { error: e.message };
+  }
+  try {
+    results.winBack = await runWinBackCampaign();
+  } catch (e) {
+    results.winBack = { error: e.message };
+  }
+  return results;
+}
+
 module.exports = {
   sendCampaign,
   sendWelcomePush,
   runStreakReminderCampaign,
   runLowCreditsCampaign,
   announceNewDrop,
+  runWinBackCampaign,
+  runDailyNudgeCampaign,
+  runScheduledCampaigns,
   CAMPAIGNS
 };

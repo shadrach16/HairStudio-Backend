@@ -1,7 +1,9 @@
 const express = require('express');
 const Hairstyle = require('../models/Hairstyle');
-const { optionalAuth } = require('../middleware/auth');
+const { optionalAuth, protect } = require('../middleware/auth');
 const Analytics = require('../models/Analytics');
+const { extractAttributes } = require('../services/attributeExtractor');
+const { PROMPT_VERSION } = require('../prompts/promptFamilies');
 
 const router = express.Router();
 
@@ -161,38 +163,6 @@ router.get('/', optionalAuth, async (req, res, next) => {
   }
 });
 
-// @desc    Get single hairstyle
-// @route   GET /api/hairstyles/:id
-// @access  Public
-router.get('/:id', optionalAuth, async (req, res, next) => {
-  try {
-    const hairstyle = await Hairstyle.findById(req.params.id);
-
-    if (!hairstyle || !hairstyle.isActive) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Hairstyle not found'
-      });
-    }
-
-    // Track hairstyle view
-    if (req.user) {
-      await Analytics.trackEvent('hairstyle_viewed', {
-        hairstyle_id: hairstyle._id,
-        hairstyle_name: hairstyle.name,
-        category: hairstyle.category
-      }, req.user.id);
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: { hairstyle }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
 // @desc    Get popular hairstyles
 // @route   GET /api/hairstyles/popular/:limit?
 // @access  Public
@@ -313,6 +283,155 @@ router.post('/search', optionalAuth, async (req, res, next) => {
       results: paginatedResults.length,
       total: hairstyles.length,
       data: { hairstyles: paginatedResults }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── A2: Attribute Extraction Endpoints ─────────────────────────────────────
+
+// @desc    Extract structured attributes for a single hairstyle
+// @route   POST /api/hairstyles/:id/extract-attributes
+// @access  Private (admin/service)
+router.post('/:id/extract-attributes', protect, async (req, res, next) => {
+  try {
+    const hairstyle = await Hairstyle.findById(req.params.id);
+    if (!hairstyle) {
+      return res.status(404).json({ status: 'error', message: 'Hairstyle not found' });
+    }
+
+    const { success, attributes, method } = await extractAttributes(hairstyle);
+    if (!success) {
+      return res.status(500).json({ status: 'error', message: 'Extraction failed' });
+    }
+
+    hairstyle.attributes = attributes;
+    hairstyle.attributesVersion = (hairstyle.attributesVersion || 0) + 1;
+    await hairstyle.save();
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        hairstyleId: hairstyle._id,
+        name: hairstyle.name,
+        attributes,
+        attributesVersion: hairstyle.attributesVersion,
+        method
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Batch-extract attributes for all hairstyles missing them
+// @route   POST /api/hairstyles/extract-attributes/batch
+// @access  Private (admin/service)
+router.post('/extract-attributes/batch', protect, async (req, res, next) => {
+  try {
+    const { force = false, limit = 50 } = req.body;
+
+    // Find hairstyles that need extraction
+    const query = force
+      ? { isActive: true }
+      : { isActive: true, $or: [{ attributesVersion: { $exists: false } }, { attributesVersion: 0 }] };
+
+    const hairstyles = await Hairstyle.find(query)
+      .select('_id name category ai_description attributes attributesVersion')
+      .limit(parseInt(limit));
+
+    const results = [];
+    for (const hs of hairstyles) {
+      try {
+        const { success, attributes, method } = await extractAttributes(hs);
+        if (success) {
+          hs.attributes = attributes;
+          hs.attributesVersion = (hs.attributesVersion || 0) + 1;
+          await hs.save();
+          results.push({ id: hs._id, name: hs.name, status: 'extracted', method, promptFamily: attributes.promptFamily });
+        } else {
+          results.push({ id: hs._id, name: hs.name, status: 'failed' });
+        }
+      } catch (err) {
+        results.push({ id: hs._id, name: hs.name, status: 'error', message: err.message });
+      }
+    }
+
+    const extracted = results.filter(r => r.status === 'extracted').length;
+    res.status(200).json({
+      status: 'success',
+      data: {
+        total: hairstyles.length,
+        extracted,
+        failed: hairstyles.length - extracted,
+        promptVersion: PROMPT_VERSION,
+        results
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get prompt version and attribute coverage stats
+// @route   GET /api/hairstyles/attributes/stats
+// @access  Public
+router.get('/attributes/stats', async (req, res, next) => {
+  try {
+    const [total, withAttributes, byFamily] = await Promise.all([
+      Hairstyle.countDocuments({ isActive: true }),
+      Hairstyle.countDocuments({ isActive: true, attributesVersion: { $gte: 1 } }),
+      Hairstyle.aggregate([
+        { $match: { isActive: true, 'attributes.promptFamily': { $exists: true, $ne: null } } },
+        { $group: { _id: '$attributes.promptFamily', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ])
+    ]);
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        promptVersion: PROMPT_VERSION,
+        totalActive: total,
+        withStructuredAttributes: withAttributes,
+        coverage: total > 0 ? Math.round((withAttributes / total) * 100) : 0,
+        byPromptFamily: byFamily.map(b => ({ family: b._id, count: b.count }))
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Parameterized routes MUST be last (Express matches first match) ────────
+
+// @desc    Get single hairstyle
+// @route   GET /api/hairstyles/:id
+// @access  Public
+router.get('/:id', optionalAuth, async (req, res, next) => {
+  try {
+    const hairstyle = await Hairstyle.findById(req.params.id);
+
+    if (!hairstyle || !hairstyle.isActive) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Hairstyle not found'
+      });
+    }
+
+    // Track hairstyle view
+    if (req.user) {
+      await Analytics.trackEvent('hairstyle_viewed', {
+        hairstyle_id: hairstyle._id,
+        hairstyle_name: hairstyle.name,
+        category: hairstyle.category
+      }, req.user.id);
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: { hairstyle }
     });
   } catch (error) {
     next(error);

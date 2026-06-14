@@ -1,0 +1,133 @@
+{
+  "runId": "2026-04-20T15-09-28-023Z",
+  "generatedAt": "2026-04-20T15:09:31.699Z",
+  "datasetVersion": "2026-04-20.1",
+  "baselineCandidateId": "current-production-baseline",
+  "monetization": {
+    "targetGrossMargin": 0.65,
+    "floorRevenuePerCreditUsd": 0.01,
+    "standardGenerationCredits": 1,
+    "premiumGenerationCredits": 2,
+    "standardMaxCostUsd": 0.0034999999999999996,
+    "premiumMaxCostUsd": 0.006999999999999999,
+    "pricedCreditPacks": [
+      {
+        "id": "credits25",
+        "credits": 25,
+        "priceUsd": 1.49,
+        "revenuePerCreditUsd": 0.0596
+      },
+      {
+        "id": "credits100",
+        "credits": 100,
+        "priceUsd": 5.89,
+        "revenuePerCreditUsd": 0.058899999999999994
+      },
+      {
+        "id": "credits250",
+        "credits": 250,
+        "priceUsd": 12.48,
+        "revenuePerCreditUsd": 0.04992
+      },
+      {
+        "id": "credits1000",
+        "credits": 1000,
+        "priceUsd": 44.99,
+        "revenuePerCreditUsd": 0.04499
+      },
+      {
+        "id": "credits10000",
+        "credits": 10000,
+        "priceUsd": 100,
+        "revenuePerCreditUsd": 0.01
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "id": "current-production-baseline",
+      "label": "Current production baseline",
+      "provider": "google",
+      "model": "gemini-2.5-flash-image",
+      "tier": "standard",
+      "status": "failed",
+      "runCount": 0,
+      "averageQualityScore": null,
+      "averageLatencyMs": null,
+      "costPerRenderUsd": 0.0024,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "failed",
+          "latencyMs": 2302,
+          "error": "got status: 503 Service Unavailable. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}",
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade"
+        }
+      ],
+      "blockers": [
+        "got status: 503 Service Unavailable. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "male-wave-reset",
+      "label": "Natural taper to polished waves buzz cut",
+      "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+      "sourceStyleName": "Sculpted Natural Taper Fade with Crisply Defined Line-Up",
+      "tier": "standard",
+      "previews": {
+        "current-production-baseline": null
+      }
+    }
+  ],
+  "recommendation": {
+    "standard": {
+      "baselineId": "current-production-baseline",
+      "baselineLabel": "Current production baseline",
+      "baselineQualityScore": null,
+      "baselineLatencyMs": null,
+      "selectedCandidateId": null,
+      "selectedCandidateLabel": null,
+      "selectedQualityScore": null,
+      "selectedLatencyMs": null,
+      "selectedCostPerRenderUsd": null,
+      "improvement": null,
+      "costBandValid": false,
+      "creditBudgetUsd": 0.0034999999999999996,
+      "recommendationMet": false,
+      "executionBlocked": true,
+      "blockerMessage": "got status: 503 Service Unavailable. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}",
+      "rejectedCandidates": []
+    },
+    "premium": {
+      "baselineId": "current-production-baseline",
+      "baselineLabel": "Current production baseline",
+      "baselineQualityScore": null,
+      "baselineLatencyMs": null,
+      "selectedCandidateId": null,
+      "selectedCandidateLabel": null,
+      "selectedQualityScore": null,
+      "selectedLatencyMs": null,
+      "selectedCostPerRenderUsd": null,
+      "improvement": null,
+      "costBandValid": false,
+      "creditBudgetUsd": 0.006999999999999999,
+      "recommendationMet": false,
+      "executionBlocked": true,
+      "blockerMessage": "got status: 503 Service Unavailable. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}",
+      "rejectedCandidates": []
+    }
+  },
+  "memo": {
+    "executiveSummary": "Standard-mode recommendation is blocked because the current production baseline could not be scored live. got status: 503 Service Unavailable. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}} No standard-mode replacement cleared the current baseline and cost band together. Premium-mode recommendation is blocked because the current production baseline could not be scored live. got status: 503 Service Unavailable. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}} No premium-mode replacement cleared the current baseline and cost band together. All configured candidates executed in this run.",
+    "reviewChecklist": [
+      "AI/ML Engineering Lead reviewed aggregate quality scores and per-case failures.",
+      "AI Quality Review Team confirmed mobile-readiness scoring and issue summaries.",
+      "Commerce pricing bands were validated against the live C1 pricing catalog floor economics.",
+      "Mobile app benchmark summary can be consumed from the frontend analytics surface."
+    ]
+  }
+}

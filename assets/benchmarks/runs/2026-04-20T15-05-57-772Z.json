@@ -1,0 +1,171 @@
+{
+  "runId": "2026-04-20T15-05-57-772Z",
+  "generatedAt": "2026-04-20T15:06:30.817Z",
+  "datasetVersion": "2026-04-20.1",
+  "baselineCandidateId": "current-production-baseline",
+  "monetization": {
+    "targetGrossMargin": 0.65,
+    "floorRevenuePerCreditUsd": 0.01,
+    "standardGenerationCredits": 1,
+    "premiumGenerationCredits": 2,
+    "standardMaxCostUsd": 0.0034999999999999996,
+    "premiumMaxCostUsd": 0.006999999999999999,
+    "pricedCreditPacks": [
+      {
+        "id": "credits25",
+        "credits": 25,
+        "priceUsd": 1.49,
+        "revenuePerCreditUsd": 0.0596
+      },
+      {
+        "id": "credits100",
+        "credits": 100,
+        "priceUsd": 5.89,
+        "revenuePerCreditUsd": 0.058899999999999994
+      },
+      {
+        "id": "credits250",
+        "credits": 250,
+        "priceUsd": 12.48,
+        "revenuePerCreditUsd": 0.04992
+      },
+      {
+        "id": "credits1000",
+        "credits": 1000,
+        "priceUsd": 44.99,
+        "revenuePerCreditUsd": 0.04499
+      },
+      {
+        "id": "credits10000",
+        "credits": 10000,
+        "priceUsd": 100,
+        "revenuePerCreditUsd": 0.01
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "id": "current-production-baseline",
+      "label": "Current production baseline",
+      "provider": "google",
+      "model": "gemini-2.5-flash-image",
+      "tier": "standard",
+      "status": "failed",
+      "runCount": 0,
+      "averageQualityScore": null,
+      "averageLatencyMs": null,
+      "costPerRenderUsd": 0.0024,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "female-cornrow-refresh",
+          "caseLabel": "Coil-out to straight-back cornrows",
+          "status": "failed",
+          "latencyMs": 0,
+          "error": "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+          "targetStyleName": "Full Cornrow Set - All Back Straight Stitch"
+        },
+        {
+          "caseId": "female-goddess-braids-upgrade",
+          "caseLabel": "Sleek bob to goddess box braids",
+          "status": "failed",
+          "latencyMs": 0,
+          "error": "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+          "targetStyleName": "Goddess Box Braids with Loose Curl Extensions"
+        },
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "failed",
+          "latencyMs": 0,
+          "error": "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade"
+        }
+      ],
+      "blockers": [
+        "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+        "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+        "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "female-cornrow-refresh",
+      "label": "Coil-out to straight-back cornrows",
+      "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+      "sourceStyleName": "Defined Coil Out on Short Natural Hair",
+      "tier": "standard",
+      "previews": {
+        "current-production-baseline": null
+      }
+    },
+    {
+      "id": "female-goddess-braids-upgrade",
+      "label": "Sleek bob to goddess box braids",
+      "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+      "sourceStyleName": "Sleek Asymmetrical Bob/Side-Part Wavy Blend",
+      "tier": "premium",
+      "previews": {
+        "current-production-baseline": null
+      }
+    },
+    {
+      "id": "male-wave-reset",
+      "label": "Natural taper to polished waves buzz cut",
+      "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+      "sourceStyleName": "Sculpted Natural Taper Fade with Crisply Defined Line-Up",
+      "tier": "standard",
+      "previews": {
+        "current-production-baseline": null
+      }
+    }
+  ],
+  "recommendation": {
+    "standard": {
+      "baselineId": "current-production-baseline",
+      "baselineLabel": "Current production baseline",
+      "baselineQualityScore": null,
+      "baselineLatencyMs": null,
+      "selectedCandidateId": null,
+      "selectedCandidateLabel": null,
+      "selectedQualityScore": null,
+      "selectedLatencyMs": null,
+      "selectedCostPerRenderUsd": null,
+      "improvement": null,
+      "costBandValid": false,
+      "creditBudgetUsd": 0.0034999999999999996,
+      "recommendationMet": false,
+      "executionBlocked": true,
+      "blockerMessage": "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+      "rejectedCandidates": []
+    },
+    "premium": {
+      "baselineId": "current-production-baseline",
+      "baselineLabel": "Current production baseline",
+      "baselineQualityScore": null,
+      "baselineLatencyMs": null,
+      "selectedCandidateId": null,
+      "selectedCandidateLabel": null,
+      "selectedQualityScore": null,
+      "selectedLatencyMs": null,
+      "selectedCostPerRenderUsd": null,
+      "improvement": null,
+      "costBandValid": false,
+      "creditBudgetUsd": 0.006999999999999999,
+      "recommendationMet": false,
+      "executionBlocked": true,
+      "blockerMessage": "Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms",
+      "rejectedCandidates": []
+    }
+  },
+  "memo": {
+    "executiveSummary": "Standard-mode recommendation is blocked because the current production baseline could not be scored live. Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms No standard-mode replacement cleared the current baseline and cost band together. Premium-mode recommendation is blocked because the current production baseline could not be scored live. Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms | Production sample fetch failed: Operation `generations.findOne()` buffering timed out after 10000ms No premium-mode replacement cleared the current baseline and cost band together. All configured candidates executed in this run.",
+    "reviewChecklist": [
+      "AI/ML Engineering Lead reviewed aggregate quality scores and per-case failures.",
+      "AI Quality Review Team confirmed mobile-readiness scoring and issue summaries.",
+      "Commerce pricing bands were validated against the live C1 pricing catalog floor economics.",
+      "Mobile app benchmark summary can be consumed from the frontend analytics surface."
+    ]
+  }
+}

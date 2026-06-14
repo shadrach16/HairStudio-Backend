@@ -62,6 +62,10 @@ revenueCat: {
         sparse: true 
     }
   },
+  creditTransaction: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CreditTransaction'
+  },
   metadata: {
     userAgent: String,
     ipAddress: String,

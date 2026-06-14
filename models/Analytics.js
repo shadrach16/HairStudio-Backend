@@ -57,6 +57,9 @@ const analyticsSchema = new mongoose.Schema({
 analyticsSchema.index({ eventName: 1, timestamp: -1 });
 analyticsSchema.index({ userId: 1, timestamp: -1 });
 analyticsSchema.index({ timestamp: -1 });
+// G2: Collection & recommendation analytics queries
+analyticsSchema.index({ eventName: 1, 'properties.collectionSlug': 1, timestamp: -1 });
+analyticsSchema.index({ eventName: 1, 'properties.recommendationSource': 1, timestamp: -1 });
 
 // Static method to track event
 analyticsSchema.statics.trackEvent = function(eventName, properties = {}, userId = null, metadata = {}) {

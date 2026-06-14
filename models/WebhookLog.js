@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 const webhookLogSchema = new mongoose.Schema({
   source: {
     type: String,
-    enum: ['revenuecat', 'dodo', 'paystack', 'other'],
+    enum: ['revenuecat', 'dodo', 'other'],
     required: true,
     index: true
   },

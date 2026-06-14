@@ -20,8 +20,9 @@ router.get('/profile', protect, async (req, res) => {
         avatar: user.avatar,
         isPro: user.isPro,
         credits: user.totalCredits,
-        subscriptionPlan: user.subscriptionPlan,
-        subscriptionExpiry: user.subscriptionExpiry,
+        subscription: user.subscription,
+        subscriptionPlan: user.subscription?.plan || 'free',
+        subscriptionExpiry: user.subscription?.endDate || null,
         createdAt: user.createdAt,
         lastLogin: user.lastLogin
       }

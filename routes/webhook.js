@@ -4,30 +4,14 @@ const User = require('../models/User');
 const Payment = require('../models/Payment');
 const WebhookLog = require('../models/WebhookLog');
 const Analytics = require('../models/Analytics');
+const creditLedger = require('../services/creditLedger');
+const subscriptionService = require('../services/subscriptionService');
+const {
+  CATALOG_VERSION,
+  findCatalogItemByStorefrontId
+} = require('../services/pricingCatalog');
 
 const router = express.Router();
-
-// --- CONFIGURATION ---
-
-const CREDIT_PACKS = {
-  'credits3': { id: 'credits3', name: 'Beginners Pack', credits: 3 },
-  'credits10': { id: 'credits10', name: 'Novies Pack', credits: 10 },
-  'credits25': { id: 'credits25', name: 'Starter Pack', credits: 25 },
-  'credits100': { id: 'credits100', name: 'Essential Pack', credits: 100 },
-  'credits250': { id: 'credits250', name: 'Stylist Pack', credits: 250 },
-  'unlimited': { id: 'unlimited', name: 'Lifetime Access (VIP)', credits: 9999999 }, // Or handle as subscription
-};
-const DODO_CREDIT_PACKS = {
-  'pdt_pfhTvWTjDJAIDqBe8r8Ab': { id: 'credits25', name: 'Starter Pack', credits: 25, price:'1.49' },
-  'pdt_s6wp6uV54N8VlApn5MKqU': { id: 'credits100', name: 'Essential Pack', credits: 100, price:'5.89' },
-  'pdt_P4zhEuGkXT30Kg3OKr9zM': { id: 'credits250', name: 'Stylist Pack', credits: 250, price:'12.48' },
-  'pdt_NQ0vZ7eaMMMZJEEMiLHWz': { id: 'credits1000', name: 'VIP Pack', credits: 1000, price:'44.99' },
-  'pdt_ZaJToyG0j8zfq1zbcDMUD': { id: 'credits1000', name: 'Premium Pack', credits: 10000, price:'100' },
-};
-
-
-
-
 const REVENUECAT_WEBHOOK_TOKEN = process.env.REVENUECAT_WEBHOOK_TOKEN;
 
 
@@ -61,10 +45,11 @@ router.post('/revenuecat', express.json(), async (req, res) => {
   // 3. Acknowledge the event immediately
   res.status(200).send('OK');
 
-  // 4. Process the event asynchronously
+  // 4. Process the event asynchronously with event-type routing (C3)
   try {
     const { app_user_id, product_id, transaction_id, id: event_id, price_in_purchased_currency, currency } = event;
-    console.log('revenuelog', event.type, app_user_id, product_id);
+    const eventType = event.type;
+    console.log('[RC Webhook] Event:', eventType, app_user_id, product_id);
 
     // 5. Find the user
     const user = await User.findById(app_user_id);
@@ -74,21 +59,261 @@ router.post('/revenuecat', express.json(), async (req, res) => {
       return;
     }
 
-    // 6. Get credit pack details
-    const pack = CREDIT_PACKS[product_id];
+    // C3: Route by RevenueCat event type
+    // Subscription lifecycle events
+    const SUBSCRIPTION_EVENTS = [
+      'INITIAL_PURCHASE', 'RENEWAL', 'PRODUCT_CHANGE',
+      'CANCELLATION', 'UNCANCELLATION', 'EXPIRATION',
+      'BILLING_ISSUE_DETECTED', 'SUBSCRIBER_ALIAS'
+    ];
+
+    const isSubscriptionLifecycleEvent = SUBSCRIPTION_EVENTS.includes(eventType);
+
+    // Resolve product
+    const pack = findCatalogItemByStorefrontId('revenueCat', product_id, 'credit_pack');
+    const subscriptionPlan = findCatalogItemByStorefrontId('revenueCat', product_id, 'subscription');
+
+    // --- C3: Subscription lifecycle event routing ---
+    if (isSubscriptionLifecycleEvent || subscriptionPlan) {
+      switch (eventType) {
+        case 'INITIAL_PURCHASE':
+        case 'RENEWAL': {
+          if (!subscriptionPlan) {
+            // Non-subscription initial purchase (credit pack) — handled below
+            break;
+          }
+
+          const isRenewal = eventType === 'RENEWAL';
+
+          if (isRenewal && user.subscription?.status === 'active') {
+            // Refresh the cycle instead of re-activating
+            const refresh = await subscriptionService.refreshSubscriptionCycle({
+              userId: user._id,
+              now: new Date()
+            });
+
+            await Payment.create({
+              user: user._id,
+              type: 'subscription',
+              itemId: subscriptionPlan.id,
+              itemName: subscriptionPlan.name,
+              amount: price_in_purchased_currency || 0,
+              currency: currency || 'USD',
+              credits: refresh.grantedCredits || 0,
+              status: 'success',
+              revenueCat: { transactionId: transaction_id, eventId: event_id },
+              webhookData: event,
+              metadata: {
+                source: 'revenuecat',
+                eventType,
+                catalogVersion: CATALOG_VERSION,
+                providerProductId: product_id,
+                subscriptionPlanId: subscriptionPlan.id
+              }
+            });
+
+            await Analytics.trackEvent('subscription_renewed', {
+              source: 'revenuecat',
+              planId: subscriptionPlan.id,
+              grantedCredits: refresh.grantedCredits || 0,
+              amount: price_in_purchased_currency || 0,
+              currency: currency || 'USD'
+            }, user._id);
+
+            await WebhookLog.markProcessed('revenuecat', eventId, {
+              eventType, renewed: true,
+              planId: subscriptionPlan.id,
+              creditsGranted: refresh.grantedCredits || 0
+            });
+
+            console.log(`[RC Webhook] Renewal processed: ${subscriptionPlan.id} for ${user.email}`);
+            return;
+          }
+
+          // Initial purchase or reactivation
+          const subActivation = await subscriptionService.activateSubscription({
+            userId: user._id,
+            planId: subscriptionPlan.id,
+            provider: 'revenuecat',
+            providerSubscriptionId: transaction_id || event_id,
+            activateAt: new Date(),
+            skipCycleGrant: false
+          });
+
+          const payment = await Payment.create({
+            user: user._id,
+            type: 'subscription',
+            itemId: subscriptionPlan.id,
+            itemName: subscriptionPlan.name,
+            amount: price_in_purchased_currency || 0,
+            currency: currency || 'USD',
+            credits: subActivation.grantedCredits || 0,
+            status: 'success',
+            revenueCat: { transactionId: transaction_id, eventId: event_id },
+            webhookData: event,
+            metadata: {
+              source: 'revenuecat',
+              eventType,
+              catalogVersion: CATALOG_VERSION,
+              providerProductId: product_id,
+              subscriptionPlanId: subscriptionPlan.id,
+              providerSubscriptionId: transaction_id || event_id
+            }
+          });
+
+          await Analytics.trackEvent('subscription_activated', {
+            source: 'revenuecat',
+            eventType,
+            planId: subscriptionPlan.id,
+            grantedCredits: subActivation.grantedCredits || 0,
+            amount: price_in_purchased_currency || 0,
+            currency: currency || 'USD'
+          }, user._id);
+
+          await WebhookLog.markProcessed('revenuecat', eventId, {
+            eventType,
+            subscriptionActivated: true,
+            planId: subscriptionPlan.id,
+            paymentId: payment._id,
+            creditsGranted: subActivation.grantedCredits || 0
+          });
+
+          console.log(`[RC Webhook] ${eventType}: ${subscriptionPlan.id} for ${user.email}`);
+          return;
+        }
+
+        case 'PRODUCT_CHANGE': {
+          if (!subscriptionPlan) break;
+
+          const changeResult = await subscriptionService.changeSubscriptionPlan({
+            userId: user._id,
+            newPlanId: subscriptionPlan.id,
+            provider: 'revenuecat'
+          });
+
+          await Analytics.trackEvent('subscription_plan_changed', {
+            source: 'revenuecat',
+            oldPlan: changeResult.oldPlan?.id,
+            newPlan: subscriptionPlan.id,
+            isUpgrade: changeResult.isUpgrade,
+            proratedCredits: changeResult.proratedCredits || 0
+          }, user._id);
+
+          await WebhookLog.markProcessed('revenuecat', eventId, {
+            eventType,
+            planChanged: true,
+            oldPlan: changeResult.oldPlan?.id,
+            newPlan: subscriptionPlan.id,
+            isUpgrade: changeResult.isUpgrade
+          });
+
+          console.log(`[RC Webhook] Plan changed to ${subscriptionPlan.id} for ${user.email}`);
+          return;
+        }
+
+        case 'CANCELLATION': {
+          const cancelResult = await subscriptionService.cancelSubscription({
+            userId: user._id,
+            requestedAt: new Date()
+          });
+
+          await Analytics.trackEvent('subscription_cancelled', {
+            source: 'revenuecat',
+            planId: user.subscription?.plan,
+            cancelAtPeriodEnd: cancelResult.cancelAtPeriodEnd,
+            periodEnd: cancelResult.periodEnd
+          }, user._id);
+
+          await WebhookLog.markProcessed('revenuecat', eventId, {
+            eventType, cancelled: cancelResult.cancelled
+          });
+
+          console.log(`[RC Webhook] Cancellation for ${user.email}`);
+          return;
+        }
+
+        case 'UNCANCELLATION': {
+          const restoreResult = await subscriptionService.restoreSubscription({
+            userId: user._id
+          });
+
+          await Analytics.trackEvent('subscription_uncancelled', {
+            source: 'revenuecat',
+            planId: user.subscription?.plan
+          }, user._id);
+
+          await WebhookLog.markProcessed('revenuecat', eventId, {
+            eventType, restored: restoreResult.restored
+          });
+
+          console.log(`[RC Webhook] Uncancellation for ${user.email}`);
+          return;
+        }
+
+        case 'EXPIRATION': {
+          const termResult = await subscriptionService.terminateSubscription({
+            userId: user._id,
+            terminatedAt: new Date(),
+            reason: 'provider_expiration'
+          });
+
+          await Analytics.trackEvent('subscription_expired', {
+            source: 'revenuecat',
+            planId: user.subscription?.plan
+          }, user._id);
+
+          await WebhookLog.markProcessed('revenuecat', eventId, {
+            eventType, terminated: termResult.terminated
+          });
+
+          console.log(`[RC Webhook] Expiration for ${user.email}`);
+          return;
+        }
+
+        case 'BILLING_ISSUE_DETECTED': {
+          const billingResult = await subscriptionService.handleBillingIssue({
+            userId: user._id,
+            detectedAt: new Date(),
+            providerEvent: eventType
+          });
+
+          await Analytics.trackEvent('subscription_billing_issue', {
+            source: 'revenuecat',
+            planId: user.subscription?.plan,
+            graceDeadline: billingResult.graceDeadline
+          }, user._id);
+
+          await WebhookLog.markProcessed('revenuecat', eventId, {
+            eventType, handled: billingResult.handled, graceDeadline: billingResult.graceDeadline
+          });
+
+          console.log(`[RC Webhook] Billing issue detected for ${user.email}`);
+          return;
+        }
+
+        case 'SUBSCRIBER_ALIAS': {
+          // No action needed — RevenueCat alias event
+          await WebhookLog.markProcessed('revenuecat', eventId, { eventType, action: 'ignored' });
+          console.log(`[RC Webhook] Subscriber alias event for ${user.email}`);
+          return;
+        }
+
+        default:
+          break;
+      }
+    }
+
+    // --- Credit pack purchase (non-subscription) ---
     if (!pack || !pack.credits) {
-      console.error(`[RC Webhook] Credit pack not found or has 0 credits: ${product_id}`);
+      console.error(`[RC Webhook] Catalog item not found for product: ${product_id}`);
       await WebhookLog.markFailed('revenuecat', eventId, 'Invalid product');
       return;
     }
 
-    // 7. Grant Credits & Log Payment
-    await user.addCredits(pack.credits);
-
     const payment = await Payment.create({
       user: user._id,
       type: 'credit_pack',
-      itemId: product_id,
+      itemId: pack.id,
       itemName: pack.name,
       amount: price_in_purchased_currency,
       currency: currency || 'USD',
@@ -101,7 +326,36 @@ router.post('/revenuecat', express.json(), async (req, res) => {
       webhookData: event
     });
 
-    // 8. Track analytics
+    const ledgerResult = await creditLedger.creditUser({
+      userId: user._id,
+      amount: pack.credits,
+      kind: 'purchase',
+      source: 'revenuecat',
+      reason: `RevenueCat purchase for ${pack.name}`,
+      description: pack.description,
+      reference: {
+        payment: payment._id,
+        catalogItemId: pack.id,
+        providerTransactionId: transaction_id,
+        correlationId: event_id
+      },
+      metadata: {
+        catalogVersion: CATALOG_VERSION,
+        providerProductId: product_id,
+        amount: price_in_purchased_currency,
+        currency: currency || 'USD'
+      }
+    });
+
+    payment.creditTransaction = ledgerResult.transaction._id;
+    payment.metadata = {
+      source: 'revenuecat',
+      catalogVersion: CATALOG_VERSION,
+      providerProductId: product_id,
+      ledgerTransactionId: ledgerResult.transaction._id
+    };
+    await payment.save();
+
     await Analytics.trackEvent('purchase_completed', {
       source: 'revenuecat',
       productId: product_id,
@@ -110,7 +364,6 @@ router.post('/revenuecat', express.json(), async (req, res) => {
       currency: currency || 'USD'
     }, user._id);
 
-    // 9. Mark webhook as processed
     await WebhookLog.markProcessed('revenuecat', eventId, {
       creditsGranted: pack.credits,
       paymentId: payment._id
@@ -164,21 +417,79 @@ router.post('/dodo', express.json(), async (req, res) => {
       return;
     }
 
-    // 5. Get credit pack details
-    const pack = DODO_CREDIT_PACKS[product_id];
+    // 5. Resolve product by type (credit pack or subscription)
+    const pack = findCatalogItemByStorefrontId('dodo', product_id, 'credit_pack');
+    const subscriptionPlan = findCatalogItemByStorefrontId('dodo', product_id, 'subscription');
+
+    if (!pack && !subscriptionPlan) {
+      console.error(`[Dodo Webhook] Catalog item not found: ${product_id}`);
+      await WebhookLog.markFailed('dodo', eventId, 'Invalid product');
+      return;
+    }
+
+    if (subscriptionPlan) {
+      const subActivation = await subscriptionService.activateSubscription({
+        userId: user._id,
+        planId: subscriptionPlan.id,
+        provider: 'dodo',
+        providerSubscriptionId: transaction_id || eventId,
+        activateAt: new Date(),
+        skipCycleGrant: false
+      });
+
+      const payment = await Payment.create({
+        user: user._id,
+        type: 'subscription',
+        itemId: subscriptionPlan.id,
+        itemName: subscriptionPlan.name,
+        amount: price_in_purchased_currency || 0,
+        currency: currency || 'USD',
+        credits: subActivation.grantedCredits || 0,
+        status: 'success',
+        dodoPayment: {
+          transactionId: transaction_id,
+          eventId: eventId
+        },
+        webhookData: req.body.data,
+        metadata: {
+          source: 'dodo',
+          catalogVersion: CATALOG_VERSION,
+          providerProductId: product_id,
+          subscriptionPlanId: subscriptionPlan.id,
+          providerSubscriptionId: transaction_id || eventId
+        }
+      });
+
+      await Analytics.trackEvent('subscription_activated', {
+        source: 'dodo',
+        planId: subscriptionPlan.id,
+        providerProductId: product_id,
+        grantedCredits: subActivation.grantedCredits || 0,
+        amount: price_in_purchased_currency || 0,
+        currency: currency || 'USD'
+      }, user._id);
+
+      await WebhookLog.markProcessed('dodo', eventId, {
+        subscriptionActivated: true,
+        planId: subscriptionPlan.id,
+        paymentId: payment._id,
+        creditsGranted: subActivation.grantedCredits || 0
+      });
+
+      console.log(`[Dodo Webhook] Subscription activated: ${subscriptionPlan.id} for ${user.email}`);
+      return;
+    }
+
     if (!pack || !pack.credits) {
       console.error(`[Dodo Webhook] Credit pack not found or has 0 credits: ${product_id}`);
       await WebhookLog.markFailed('dodo', eventId, 'Invalid product');
       return;
     }
 
-    // 6. Grant Credits & Log Payment
-    await user.addCredits(pack.credits);
-
     const payment = await Payment.create({
       user: user._id,
       type: 'credit_pack',
-      itemId: product_id,
+      itemId: pack.id,
       itemName: pack.name,
       amount: price_in_purchased_currency,
       currency: currency || 'USD',
@@ -190,6 +501,37 @@ router.post('/dodo', express.json(), async (req, res) => {
       },
       webhookData: req.body.data
     });
+
+    const ledgerResult = await creditLedger.creditUser({
+      userId: user._id,
+      amount: pack.credits,
+      kind: 'purchase',
+      source: 'dodo',
+      reason: `Dodo purchase for ${pack.name}`,
+      description: pack.description,
+      reference: {
+        payment: payment._id,
+        catalogItemId: pack.id,
+        providerTransactionId: transaction_id,
+        correlationId: eventId
+      },
+      metadata: {
+        catalogVersion: CATALOG_VERSION,
+        providerProductId: product_id,
+        amount: price_in_purchased_currency,
+        currency: currency || 'USD'
+      }
+    });
+
+    payment.creditTransaction = ledgerResult.transaction._id;
+
+    payment.metadata = {
+      source: 'dodo',
+      catalogVersion: CATALOG_VERSION,
+      providerProductId: product_id,
+      ledgerTransactionId: ledgerResult.transaction._id
+    };
+    await payment.save();
 
     // 7. Track analytics
     await Analytics.trackEvent('purchase_completed', {

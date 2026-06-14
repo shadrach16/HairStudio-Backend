@@ -119,6 +119,9 @@ router.post('/admin/campaign', protect, catchAsync(async (req, res) => {
     case 'new_drops':
       result = await campaignService.announceNewDrop(extra?.styleName);
       break;
+    case 'win_back':
+      result = await campaignService.runWinBackCampaign();
+      break;
     default:
       return res.status(400).json({
         success: false,
@@ -168,6 +171,28 @@ router.get('/admin/logs', protect, catchAsync(async (req, res) => {
       total,
       pages: Math.ceil(total / limit)
     }
+  });
+}));
+
+/**
+ * @route POST /api/push/cron
+ * @desc Run all scheduled campaigns (called by external cron/scheduler)
+ * @access Admin or cron secret
+ */
+router.post('/cron', catchAsync(async (req, res) => {
+  // Validate via admin auth or cron secret header
+  const cronSecret = req.headers['x-cron-secret'];
+  const isAdmin = req.user?.isAdmin;
+
+  if (!isAdmin && (!process.env.CRON_SECRET || cronSecret !== process.env.CRON_SECRET)) {
+    return res.status(403).json({ success: false, message: 'Unauthorized' });
+  }
+
+  const results = await campaignService.runScheduledCampaigns();
+
+  res.json({
+    success: true,
+    data: results
   });
 }));
 

@@ -28,6 +28,11 @@ const userSchema = new mongoose.Schema({
    deviceToken: {
     type: String  
   },
+  devicePlatform: {
+    type: String,
+    enum: ['ios', 'android', 'web', 'unknown'],
+    default: 'unknown'
+  },
   // --- 2. ADDED REFERRAL FIELDS ---
   referralCode: {
     type: String,
@@ -63,18 +68,64 @@ const userSchema = new mongoose.Schema({
   subscription: {
     plan: {
       type: String,
-      enum: ['free', 'pro', 'salon'],
+      enum: ['free', 'pro', 'salon', 'basic_monthly', 'plus_monthly', 'pro_monthly'],
       default: 'free'
     },
     status: {
       type: String,
-      enum: ['active', 'inactive', 'cancelled'],
+      enum: ['active', 'inactive', 'cancelled', 'past_due', 'expired'],
       default: 'inactive'
+    },
+    provider: {
+      type: String,
+      enum: ['none', 'revenuecat', 'dodo'],
+      default: 'none'
+    },
+    providerSubscriptionId: {
+      type: String,
+      default: null
     },
     startDate: Date,
     endDate: Date,
-    paystackCustomerCode: String,
-    paystackSubscriptionCode: String
+    currentPeriodStart: Date,
+    currentPeriodEnd: Date,
+    cancelAtPeriodEnd: {
+      type: Boolean,
+      default: false
+    },
+    cancellationRequestedAt: {
+      type: Date,
+      default: null
+    },
+    creditsPerMonth: {
+      type: Number,
+      default: 0
+    },
+    rolloverCap: {
+      type: Number,
+      default: 0
+    },
+    walletCredits: {
+      type: Number,
+      default: 0
+    },
+    lastRefreshAt: {
+      type: Date,
+      default: null
+    },
+    nextRefreshAt: {
+      type: Date,
+      default: null
+    },
+    // C3: Billing issue tracking for grace period
+    billingIssueDetectedAt: {
+      type: Date,
+      default: null
+    },
+    graceDeadline: {
+      type: Date,
+      default: null
+    }
   },
   freeTrialUsed: {
     type: Number,
@@ -129,6 +180,15 @@ const userSchema = new mongoose.Schema({
       default: 0
     }
   },
+  // Play Store review reward (one-time)
+  hasClaimedReviewReward: {
+    type: Boolean,
+    default: false
+  },
+  reviewRewardClaimedAt: {
+    type: Date,
+    default: null
+  },
   // Onboarding state
   onboarding: {
     version: {
@@ -153,7 +213,6 @@ userSchema.index({ email: 1 });
 userSchema.index({ googleId: 1 });
 userSchema.index({ referralCode: 1 }); // 3. Added index for referral code
 userSchema.index({ guestDeviceId: 1 }); // Guest device lookup
-userSchema.index({ 'subscription.paystackCustomerCode': 1 });
 
 // --- 4. ADDED PRE-SAVE HOOK TO GENERATE REFERRAL CODE ---
 userSchema.pre('save', async function(next) {
@@ -212,9 +271,20 @@ userSchema.methods.addCredits = function(amount) {
 
 // Method to check subscription status
 userSchema.methods.hasActiveSubscription = function() {
-  return this.subscription.status === 'active' && 
-         this.subscription.endDate && 
-         new Date() < this.subscription.endDate;
+  const sub = this.subscription || {};
+  if (sub.status !== 'active') {
+    return false;
+  }
+
+  if (sub.currentPeriodEnd) {
+    return new Date() < new Date(sub.currentPeriodEnd);
+  }
+
+  if (sub.endDate) {
+    return new Date() < new Date(sub.endDate);
+  }
+
+  return false;
 };
 
 userSchema.set('toJSON', { virtuals: true });

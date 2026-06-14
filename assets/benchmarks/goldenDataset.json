@@ -1,0 +1,54 @@
+{
+  "version": "2026-04-20.1",
+  "description": "Mobile-first portrait editing benchmark set for Hair Studio production model selection.",
+  "cases": [
+    {
+      "id": "female-cornrow-refresh",
+      "label": "Coil-out to straight-back cornrows",
+      "sourceImageUrl": "https://res.cloudinary.com/djpcokxvn/image/upload/c_thumb,w_200,g_face/v1762827089/Hairstyles/WhatsApp_Image_2025-11-08_at_02.50.05_4d7ddd87_opyjly.jpg",
+      "sourceStyleName": "Defined Coil Out on Short Natural Hair",
+      "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+      "targetBrief": "Transform the subject into a clean straight-back stitch cornrow style with 14 to 18 slim scalp braids, precise part lines, polished edges, minimal flyaways, and realistic scalp tension while preserving the exact face, pose, skin tone, outfit, and background.",
+      "expectedAttributes": [
+        "straight-back cornrows",
+        "tight and clean stitch parts",
+        "preserved facial identity",
+        "polished edges and low flyaways",
+        "photo-realistic mobile portrait output"
+      ],
+      "tier": "standard"
+    },
+    {
+      "id": "female-goddess-braids-upgrade",
+      "label": "Sleek bob to goddess box braids",
+      "sourceImageUrl": "https://res.cloudinary.com/djpcokxvn/image/upload/v1762828375/Hairstyles/WhatsApp_Image_2025-11-08_at_07.30.50_55b1ea29_ibsaua.jpg",
+      "sourceStyleName": "Sleek Asymmetrical Bob/Side-Part Wavy Blend",
+      "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+      "targetBrief": "Apply medium goddess box braids with visible individual roots, loose curl extensions, balanced volume around the face, polished edges, and a premium salon finish while keeping the same person, camera angle, lighting, and background untouched.",
+      "expectedAttributes": [
+        "individual goddess box braids",
+        "loose curl extensions",
+        "high-volume premium finish",
+        "identity and pose preserved",
+        "clear mobile-friendly facial framing"
+      ],
+      "tier": "premium"
+    },
+    {
+      "id": "male-wave-reset",
+      "label": "Natural taper to polished waves buzz cut",
+      "sourceImageUrl": "https://res.cloudinary.com/djpcokxvn/image/upload/v1762828606/Hairstyles/WhatsApp_Image_2025-11-08_at_08.03.46_244024b1_ennhyo.jpg",
+      "sourceStyleName": "Sculpted Natural Taper Fade with Crisply Defined Line-Up",
+      "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+      "targetBrief": "Convert the hairstyle into an ultra-clean polished waves buzz cut with tight 360 wave texture, a sharp edge-up, high taper fade, and strong temple definition while preserving the exact person, facial hair, pose, clothing, and background.",
+      "expectedAttributes": [
+        "compressed waves texture",
+        "sharp edge-up",
+        "high taper fade",
+        "preserved face and beard",
+        "realistic barbershop-level detail"
+      ],
+      "tier": "standard"
+    }
+  ]
+}

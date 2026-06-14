@@ -5,6 +5,7 @@ const express = require('express');
 const User = require('../models/User');
 const Analytics = require('../models/Analytics');
 const { protect } = require('../middleware/auth');
+const creditLedger = require('../services/creditLedger');
 
 const router = express.Router();
 
@@ -173,7 +174,15 @@ router.post('/checkin', protect, async (req, res) => {
 
     // Award credits if any milestones hit
     if (creditsAwarded > 0) {
-      user.credits += creditsAwarded;
+      const rewardResult = await creditLedger.creditUser({
+        userId: user._id,
+        amount: creditsAwarded,
+        kind: 'streak_reward',
+        source: 'daily_streak',
+        reason: `Streak milestone reward for ${currentStreak} days`,
+        description: `Milestones hit: ${milestonesHit.map((milestone) => milestone.days).join(', ')}`
+      });
+      user.credits = rewardResult.user.credits;
     }
 
     // Update streak data

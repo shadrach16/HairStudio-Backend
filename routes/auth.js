@@ -6,6 +6,8 @@ const Analytics = require('../models/Analytics');
 const { sendWelcomePush } = require('../services/campaignService');
 const { authLimit, rewardLimit, guestLimit } = require('../middleware/rateLimit');
 const Generation = require('../models/Generation');
+const CreditTransaction = require('../models/CreditTransaction');
+const creditLedger = require('../services/creditLedger');
 
 const router = express.Router();
 
@@ -89,12 +91,22 @@ router.post('/guest', guestLimit, async (req, res, next) => {
       name: `Guest ${guestId.slice(0, 4)}`,
       isGuest: true,
       guestDeviceId: deviceId,
-      credits: 1, // Only 1 credit for guests (cost control)
+      credits: 0,
       freeTrialUsed: 0,
       freeTrialExpiry: null, // No trial for guests
       lastLogin: new Date(),
       isActive: true
     });
+
+    const guestGrant = await creditLedger.creditUser({
+      userId: user._id,
+      amount: 1,
+      kind: 'signup_bonus',
+      source: 'guest_trial',
+      reason: 'Guest session starter credit',
+      description: 'Initial guest trial credit'
+    });
+    user = guestGrant.user;
 
     await Analytics.trackEvent('guest_session_created', {
       deviceId: deviceId.slice(0, 8) + '...',
@@ -166,8 +178,17 @@ router.post('/google', async (req, res, next) => {
         );
         // Transfer any remaining credits from guest
         if (guestUser.credits > 0) {
-          user.credits += guestUser.credits;
-          await user.save();
+          const transferResult = await creditLedger.creditUser({
+            userId: user._id,
+            amount: guestUser.credits,
+            kind: 'guest_credit_transfer',
+            source: 'guest_migration',
+            reason: 'Transferred remaining credits from guest session',
+            reference: {
+              relatedUser: guestUser._id
+            }
+          });
+          user = transferResult.user;
         }
         // Delete the guest user
         await User.findByIdAndDelete(guestUser._id);
@@ -197,12 +218,25 @@ router.post('/google', async (req, res, next) => {
         guestUser.guestDeviceId = null;
         guestUser.lastLogin = new Date();
         guestUser.isActive = true;
-        // Give them full signup credits (5) if they only had guest credits (1)
-        if (guestUser.credits <= 1) {
-          guestUser.credits = 5;
-        }
+        const guestCreditsBeforeConversion = guestUser.credits;
         await guestUser.save();
         user = guestUser;
+
+        // Give them full signup credits (5) if they only had guest credits (1)
+        if (guestCreditsBeforeConversion <= 1) {
+          const signupBonus = Math.max(0, 5 - guestCreditsBeforeConversion);
+          if (signupBonus > 0) {
+            const signupBonusResult = await creditLedger.creditUser({
+              userId: user._id,
+              amount: signupBonus,
+              kind: 'signup_bonus',
+              source: 'guest_conversion',
+              reason: 'Signup bonus after guest conversion',
+              description: 'Topped up guest account to full signup credits'
+            });
+            user = signupBonusResult.user;
+          }
+        }
 
         await Analytics.trackEvent('guest_converted', {
           userId: user._id,
@@ -215,9 +249,20 @@ router.post('/google', async (req, res, next) => {
           email,
           name,
           avatar,
+          credits: 0,
           lastLogin: new Date(),
           isActive: true
         });
+
+        const signupBonusResult = await creditLedger.creditUser({
+          userId: user._id,
+          amount: 5,
+          kind: 'signup_bonus',
+          source: 'signup',
+          reason: 'Initial signup credits',
+          description: 'Welcome credit bundle for new account'
+        });
+        user = signupBonusResult.user;
       }
 
 
@@ -229,8 +274,16 @@ if (referralCode) {
             await user.save();
 
             // Grant 5 credits to the referrer
-            referrer.credits += 5;
-            await referrer.save();
+            await creditLedger.creditUser({
+              userId: referrer._id,
+              amount: 5,
+              kind: 'referral_reward',
+              source: 'referral_signup',
+              reason: `Referral reward for inviting ${user.email}`,
+              reference: {
+                relatedUser: user._id
+              }
+            });
 
             // Track events
             await Analytics.trackEvent('referral_success', {
@@ -301,7 +354,8 @@ router.get('/me', protect, async (req, res, next) => {
           isSubscriptionActive,
           canGenerate,
           streak: user.streak || { currentStreak: 0, longestStreak: 0, lastActivityDate: null },
-          rewardedAds: user.rewardedAds || { rewardsToday: 0, lastRewardDate: null }
+          rewardedAds: user.rewardedAds || { rewardsToday: 0, lastRewardDate: null },
+          hasClaimedReviewReward: user.hasClaimedReviewReward || false
         }
       }
     });
@@ -394,18 +448,25 @@ router.post('/reward_ad', protect, rewardLimit, async (req, res, next) => {
       });
     }
     
-    // Grant reward
-    user.credits += REWARD_AD_CONFIG.creditsPerReward;
     user.rewardedAds.rewardsToday += 1;
     user.rewardedAds.lastRewardDate = now;
     await user.save();
+
+    const rewardResult = await creditLedger.creditUser({
+      userId: user._id,
+      amount: REWARD_AD_CONFIG.creditsPerReward,
+      kind: 'ad_reward',
+      source: 'rewarded_ad',
+      reason: 'Rewarded ad completed successfully',
+      description: 'Native mobile rewarded ad credit'
+    });
     
     // Track granted event
     const Analytics = require('../models/Analytics');
     await Analytics.trackEvent('reward_ad_granted', {
       creditsGranted: REWARD_AD_CONFIG.creditsPerReward,
       rewardsToday: user.rewardedAds.rewardsToday,
-      totalCredits: user.credits
+      totalCredits: rewardResult.user.credits
     }, user._id);
 
     res.status(200).json({
@@ -514,7 +575,21 @@ router.get('/referral-info', protect, async (req, res, next) => {
 
     // Calculate stats
     const referralCount = await User.countDocuments({ referredBy: userId, isActive: true });
-    const creditsEarned = referralCount * 5; // 5 credits per referral
+    const earnedCredits = await CreditTransaction.aggregate([
+      {
+        $match: {
+          user: req.user._id,
+          kind: 'referral_reward'
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          creditsEarned: { $sum: '$amount' }
+        }
+      }
+    ]);
+    const creditsEarned = earnedCredits[0]?.creditsEarned || 0;
 
     res.status(200).json({
       status: 'success',
@@ -588,6 +663,71 @@ router.delete('/account/delete', protect, async (req, res, next) => {
     res.status(200).json({
       status: 'success',
       message: 'Account deactivated successfully. All associated data will be removed within 30 days.'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Claim Play Store review reward (one-time, 3 credits)
+// @route   POST /api/auth/claim-review-reward
+// @access  Private
+router.post('/claim-review-reward', protect, rewardLimit, async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+
+    // One-time only guard
+    if (user.hasClaimedReviewReward) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'Review reward already claimed.',
+        data: { alreadyClaimed: true }
+      });
+    }
+
+    // Guest users cannot claim
+    if (user.isGuest) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Please sign in with Google to claim this reward.'
+      });
+    }
+
+    const REVIEW_REWARD_CREDITS = 3;
+
+    // Mark as claimed
+    user.hasClaimedReviewReward = true;
+    user.reviewRewardClaimedAt = new Date();
+    await user.save();
+
+    // Grant credits via ledger
+    const rewardResult = await creditLedger.creditUser({
+      userId: user._id,
+      amount: REVIEW_REWARD_CREDITS,
+      kind: 'review_reward',
+      source: 'play_store_review',
+      reason: 'Play Store review reward',
+      description: 'One-time reward for rating the app on Play Store'
+    });
+
+    // Track analytics
+    await Analytics.trackEvent('review_reward_claimed', {
+      creditsGranted: REVIEW_REWARD_CREDITS,
+      totalCredits: rewardResult.user.credits
+    }, user._id);
+
+    res.status(200).json({
+      status: 'success',
+      message: `${REVIEW_REWARD_CREDITS} credits added! Thank you for your review.`,
+      data: {
+        creditsAwarded: REVIEW_REWARD_CREDITS,
+        newBalance: rewardResult.user.credits,
+        hasClaimedReviewReward: true
+      }
     });
   } catch (error) {
     next(error);

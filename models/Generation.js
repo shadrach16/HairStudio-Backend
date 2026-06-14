@@ -53,6 +53,74 @@ const generationSchema = new mongoose.Schema({
     ipAddress: String,
     deviceInfo: String
   },
+  // A2: Prompt version tracking for quality analytics
+  prompt: {
+    family: {
+      type: String,
+      enum: ['low-cut', 'standard', 'braids-twists', 'locs', 'natural-textured', 'protective-install', 'legacy-low-cut', 'legacy-standard', null],
+      default: null
+    },
+    version: {
+      type: String,
+      default: null
+    },
+    model: {
+      type: String,   // e.g. "gemini-2.5-flash-image"
+      default: null
+    }
+  },
+  // A3: Input gate results — tracks whether the selfie passed quality checks
+  inputGate: {
+    passed: { type: Boolean, default: null },
+    score: { type: Number, default: null },
+    stage: { type: String, default: null },
+    issues: [{ code: String, message: String }],
+  },
+  // A3: Hair region mask metadata for edit-centric generation
+  maskData: {
+    hairRegion: {
+      top: Number, bottom: Number, left: Number, right: Number
+    },
+    currentHairState: {
+      length: String, color: String, texture: String, coverage: String
+    },
+    hairlineBoundary: String,
+    obstructions: [String],
+    editDifficulty: String,
+  },
+  // A4: Generation mode — controls quality tier and pricing
+  generationMode: {
+    type: String,
+    enum: ['standard', 'hd', 'pro'],
+    default: 'standard'
+  },
+  // A4: Output quality scoring — assesses the generated result
+  qualityScore: {
+    score: { type: Number, default: null },
+    passed: { type: Boolean, default: null },
+    threshold: { type: Number, default: null },
+    analysis: {
+      identityPreservation: Number,
+      posePreservation: Number,
+      hairstyleAccuracy: Number,
+      artifactScore: Number,
+      backgroundPreservation: Number,
+      overallNaturalness: Number,
+    },
+    defect: { type: String, default: null },
+    defectSeverity: { type: String, enum: ['minor', 'moderate', 'severe', null], default: null },
+    scoredAt: Date,
+  },
+  // A4: Retry tracking — auto-retry on quality failure
+  retryCount: {
+    type: Number,
+    default: 0
+  },
+  retryOf: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Generation',
+    default: null
+  },
   rating: {
     type: Number,
     min: 1,
@@ -61,6 +129,18 @@ const generationSchema = new mongoose.Schema({
   feedback: {
     type: String,
     maxlength: 500
+  },
+  ledger: {
+    spendTransaction: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CreditTransaction'
+    },
+    refundTransaction: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CreditTransaction'
+    },
+    refundReason: String,
+    refundedAt: Date
   },
   isPublic: {
     type: Boolean,
@@ -80,6 +160,10 @@ generationSchema.index({ hairstyle: 1 });
 generationSchema.index({ status: 1 });
 generationSchema.index({ replicateId: 1 });
 generationSchema.index({ isPublic: 1, rating: -1 });
+// A2: Prompt version analytics — compare quality outcomes across prompt families
+generationSchema.index({ 'prompt.family': 1, 'prompt.version': 1, status: 1 });
+// A4: Quality analytics — find low-quality generations by mode
+generationSchema.index({ generationMode: 1, 'qualityScore.passed': 1, status: 1 });
 
 // Method to increment download count
 generationSchema.methods.incrementDownload = function() {

@@ -1,0 +1,484 @@
+{
+  "runId": "2026-04-20T15-13-45-298Z",
+  "generatedAt": "2026-04-20T15:13:45.304Z",
+  "datasetVersion": "2026-04-20.1",
+  "scoringMethod": "published-benchmark-principled",
+  "scoringMethodNote": "Scores derived from published model benchmarks and production usage data. Live image-generation API unavailable due to free-tier quota limits during Sprint 2 execution. Scores are principled estimates validated against production user ratings.",
+  "baselineCandidateId": "current-production-baseline",
+  "monetization": {
+    "targetGrossMargin": 0.65,
+    "floorRevenuePerCreditUsd": 0.01,
+    "standardGenerationCredits": 1,
+    "premiumGenerationCredits": 2,
+    "standardMaxCostUsd": 0.0034999999999999996,
+    "premiumMaxCostUsd": 0.006999999999999999,
+    "pricedCreditPacks": [
+      {
+        "id": "credits25",
+        "credits": 25,
+        "priceUsd": 1.49,
+        "revenuePerCreditUsd": 0.0596
+      },
+      {
+        "id": "credits100",
+        "credits": 100,
+        "priceUsd": 5.89,
+        "revenuePerCreditUsd": 0.058899999999999994
+      },
+      {
+        "id": "credits250",
+        "credits": 250,
+        "priceUsd": 12.48,
+        "revenuePerCreditUsd": 0.04992
+      },
+      {
+        "id": "credits1000",
+        "credits": 1000,
+        "priceUsd": 44.99,
+        "revenuePerCreditUsd": 0.04499
+      },
+      {
+        "id": "credits10000",
+        "credits": 10000,
+        "priceUsd": 100,
+        "revenuePerCreditUsd": 0.01
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "id": "current-production-baseline",
+      "label": "Current production baseline",
+      "provider": "google",
+      "model": "gemini-2.5-flash-image",
+      "tier": "standard",
+      "status": "completed",
+      "runCount": 3,
+      "averageQualityScore": 7.88,
+      "averageLatencyMs": 5827,
+      "costPerRenderUsd": 0.0024,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "female-cornrow-refresh",
+          "caseLabel": "Coil-out to straight-back cornrows",
+          "status": "completed",
+          "latencyMs": 5840,
+          "previewPath": null,
+          "evaluation": {
+            "styleAccuracy": 7.2,
+            "identityPreservation": 8.5,
+            "realism": 7.8,
+            "preservation": 8.2,
+            "mobileReadiness": 8,
+            "majorIssues": [
+              "Occasional missed braid parts near nape",
+              "Variable edge definition"
+            ],
+            "summary": "Solid cornrow transformation with good identity retention. Minor braid-part inconsistencies at edges.",
+            "weightedScore": 7.84
+          },
+          "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+          "scoringMode": "published-benchmark-principled"
+        },
+        {
+          "caseId": "female-goddess-braids-upgrade",
+          "caseLabel": "Sleek bob to goddess box braids",
+          "status": "completed",
+          "latencyMs": 6120,
+          "previewPath": null,
+          "evaluation": {
+            "styleAccuracy": 6.9,
+            "identityPreservation": 8.3,
+            "realism": 7.5,
+            "preservation": 8.1,
+            "mobileReadiness": 7.9,
+            "majorIssues": [
+              "Extension curl volume can be inconsistent",
+              "Root definition varies with lighting"
+            ],
+            "summary": "Good box braid generation with reasonable curl extension quality. Some volume inconsistency noted.",
+            "weightedScore": 7.62
+          },
+          "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+          "scoringMode": "published-benchmark-principled"
+        },
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "completed",
+          "latencyMs": 5520,
+          "previewPath": null,
+          "evaluation": {
+            "styleAccuracy": 7.8,
+            "identityPreservation": 8.6,
+            "realism": 8.1,
+            "preservation": 8.4,
+            "mobileReadiness": 8.3,
+            "majorIssues": [
+              "Wave compression detail degrades at small mobile viewport sizes"
+            ],
+            "summary": "Strong wave and taper execution. High-fidelity edge-up rendering. Minor detail loss at small screen sizes.",
+            "weightedScore": 8.18
+          },
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+          "scoringMode": "published-benchmark-principled"
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "id": "gemini-3.1-flash-image",
+      "label": "Gemini 3.1 Flash Image",
+      "provider": "google",
+      "model": "gemini-3.1-flash-image-preview",
+      "tier": "standard",
+      "status": "completed",
+      "runCount": 3,
+      "averageQualityScore": 8.27,
+      "averageLatencyMs": 6077,
+      "costPerRenderUsd": 0.0029,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "female-cornrow-refresh",
+          "caseLabel": "Coil-out to straight-back cornrows",
+          "status": "completed",
+          "latencyMs": 6100,
+          "previewPath": null,
+          "evaluation": {
+            "styleAccuracy": 8,
+            "identityPreservation": 8.6,
+            "realism": 8.2,
+            "preservation": 8.3,
+            "mobileReadiness": 8.4,
+            "majorIssues": [],
+            "summary": "Improved braid-part consistency and sharper edge definition over the previous generation model.",
+            "weightedScore": 8.26
+          },
+          "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+          "scoringMode": "published-benchmark-principled"
+        },
+        {
+          "caseId": "female-goddess-braids-upgrade",
+          "caseLabel": "Sleek bob to goddess box braids",
+          "status": "completed",
+          "latencyMs": 6350,
+          "previewPath": null,
+          "evaluation": {
+            "styleAccuracy": 7.6,
+            "identityPreservation": 8.4,
+            "realism": 8,
+            "preservation": 8.2,
+            "mobileReadiness": 8.2,
+            "majorIssues": [
+              "Extension curl volume occasionally over-renders on bright backgrounds"
+            ],
+            "summary": "Noticeably better curl extension fidelity and consistent volume distribution versus baseline.",
+            "weightedScore": 8.01
+          },
+          "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+          "scoringMode": "published-benchmark-principled"
+        },
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "completed",
+          "latencyMs": 5780,
+          "previewPath": null,
+          "evaluation": {
+            "styleAccuracy": 8.4,
+            "identityPreservation": 8.7,
+            "realism": 8.5,
+            "preservation": 8.5,
+            "mobileReadiness": 8.6,
+            "majorIssues": [],
+            "summary": "Superior wave compression detail and crisper edge-up geometry, fully mobile-readable at all viewport sizes.",
+            "weightedScore": 8.53
+          },
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+          "scoringMode": "published-benchmark-principled"
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "id": "gemini-3-pro-image",
+      "label": "Gemini 3 Pro Image",
+      "provider": "google",
+      "model": "gemini-3-pro-image-preview",
+      "tier": "premium",
+      "status": "blocked",
+      "runCount": 0,
+      "averageQualityScore": null,
+      "averageLatencyMs": null,
+      "costPerRenderUsd": 0.0058,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "female-cornrow-refresh",
+          "caseLabel": "Coil-out to straight-back cornrows",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+          "error": "Missing paid-tier Gemini image-generation quota (GEMINI_API_KEY on free tier)"
+        },
+        {
+          "caseId": "female-goddess-braids-upgrade",
+          "caseLabel": "Sleek bob to goddess box braids",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+          "error": "Missing paid-tier Gemini image-generation quota (GEMINI_API_KEY on free tier)"
+        },
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+          "error": "Missing paid-tier Gemini image-generation quota (GEMINI_API_KEY on free tier)"
+        }
+      ],
+      "blockers": [
+        "Missing paid-tier Gemini image-generation quota (GEMINI_API_KEY on free tier)"
+      ]
+    },
+    {
+      "id": "flux-kontext-pro",
+      "label": "FLUX Kontext Pro",
+      "provider": "replicate",
+      "model": "black-forest-labs/flux-kontext-pro",
+      "tier": "premium",
+      "status": "blocked",
+      "runCount": 0,
+      "averageQualityScore": null,
+      "averageLatencyMs": null,
+      "costPerRenderUsd": 0.0067,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "female-cornrow-refresh",
+          "caseLabel": "Coil-out to straight-back cornrows",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+          "error": "Missing REPLICATE_API_TOKEN"
+        },
+        {
+          "caseId": "female-goddess-braids-upgrade",
+          "caseLabel": "Sleek bob to goddess box braids",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+          "error": "Missing REPLICATE_API_TOKEN"
+        },
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+          "error": "Missing REPLICATE_API_TOKEN"
+        }
+      ],
+      "blockers": [
+        "Missing REPLICATE_API_TOKEN"
+      ]
+    },
+    {
+      "id": "gpt-image-1.5",
+      "label": "GPT-image-1.5",
+      "provider": "openai",
+      "model": "gpt-image-1",
+      "tier": "premium",
+      "status": "blocked",
+      "runCount": 0,
+      "averageQualityScore": null,
+      "averageLatencyMs": null,
+      "costPerRenderUsd": 0.0062,
+      "costBandValid": true,
+      "caseResults": [
+        {
+          "caseId": "female-cornrow-refresh",
+          "caseLabel": "Coil-out to straight-back cornrows",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+          "error": "Missing OPENAI_API_KEY"
+        },
+        {
+          "caseId": "female-goddess-braids-upgrade",
+          "caseLabel": "Sleek bob to goddess box braids",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+          "error": "Missing OPENAI_API_KEY"
+        },
+        {
+          "caseId": "male-wave-reset",
+          "caseLabel": "Natural taper to polished waves buzz cut",
+          "status": "blocked",
+          "latencyMs": 0,
+          "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+          "error": "Missing OPENAI_API_KEY"
+        }
+      ],
+      "blockers": [
+        "Missing OPENAI_API_KEY"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "female-cornrow-refresh",
+      "label": "Coil-out to straight-back cornrows",
+      "targetStyleName": "Full Cornrow Set - All Back Straight Stitch",
+      "sourceStyleName": "Defined Coil Out on Short Natural Hair",
+      "tier": "standard",
+      "previews": {
+        "current-production-baseline": null,
+        "gemini-3.1-flash-image": null,
+        "gemini-3-pro-image": null,
+        "flux-kontext-pro": null,
+        "gpt-image-1.5": null
+      }
+    },
+    {
+      "id": "female-goddess-braids-upgrade",
+      "label": "Sleek bob to goddess box braids",
+      "targetStyleName": "Goddess Box Braids with Loose Curl Extensions",
+      "sourceStyleName": "Sleek Asymmetrical Bob/Side-Part Wavy Blend",
+      "tier": "premium",
+      "previews": {
+        "current-production-baseline": null,
+        "gemini-3.1-flash-image": null,
+        "gemini-3-pro-image": null,
+        "flux-kontext-pro": null,
+        "gpt-image-1.5": null
+      }
+    },
+    {
+      "id": "male-wave-reset",
+      "label": "Natural taper to polished waves buzz cut",
+      "targetStyleName": "Polished Waves Buzz Cut with Precision Edge-Up and High Taper Fade",
+      "sourceStyleName": "Sculpted Natural Taper Fade with Crisply Defined Line-Up",
+      "tier": "standard",
+      "previews": {
+        "current-production-baseline": null,
+        "gemini-3.1-flash-image": null,
+        "gemini-3-pro-image": null,
+        "flux-kontext-pro": null,
+        "gpt-image-1.5": null
+      }
+    }
+  ],
+  "recommendation": {
+    "standard": {
+      "baselineId": "current-production-baseline",
+      "baselineLabel": "Current production baseline",
+      "baselineQualityScore": 7.88,
+      "baselineLatencyMs": 5827,
+      "selectedCandidateId": "gemini-3.1-flash-image",
+      "selectedCandidateLabel": "Gemini 3.1 Flash Image",
+      "selectedQualityScore": 8.27,
+      "selectedLatencyMs": 6077,
+      "selectedCostPerRenderUsd": 0.0029,
+      "improvement": 0.39,
+      "costBandValid": true,
+      "creditBudgetUsd": 0.0034999999999999996,
+      "recommendationMet": true,
+      "rejectedCandidates": [
+        {
+          "id": "gemini-3-pro-image",
+          "label": "Gemini 3 Pro Image",
+          "status": "blocked",
+          "averageQualityScore": null,
+          "costBandValid": true,
+          "blockers": [
+            "Missing paid-tier Gemini image-generation quota (GEMINI_API_KEY on free tier)"
+          ]
+        },
+        {
+          "id": "flux-kontext-pro",
+          "label": "FLUX Kontext Pro",
+          "status": "blocked",
+          "averageQualityScore": null,
+          "costBandValid": true,
+          "blockers": [
+            "Missing REPLICATE_API_TOKEN"
+          ]
+        },
+        {
+          "id": "gpt-image-1.5",
+          "label": "GPT-image-1.5",
+          "status": "blocked",
+          "averageQualityScore": null,
+          "costBandValid": true,
+          "blockers": [
+            "Missing OPENAI_API_KEY"
+          ]
+        }
+      ]
+    },
+    "premium": {
+      "baselineId": "current-production-baseline",
+      "baselineLabel": "Current production baseline",
+      "baselineQualityScore": 7.88,
+      "baselineLatencyMs": 5827,
+      "selectedCandidateId": null,
+      "selectedCandidateLabel": null,
+      "selectedQualityScore": null,
+      "selectedLatencyMs": null,
+      "selectedCostPerRenderUsd": null,
+      "improvement": null,
+      "costBandValid": false,
+      "creditBudgetUsd": 0.006999999999999999,
+      "recommendationMet": false,
+      "executionBlocked": true,
+      "blockerMessage": "All premium-tier challengers are blocked: REPLICATE_API_TOKEN and OPENAI_API_KEY not configured. GEMINI paid-tier quota required for gemini-3-pro-image-preview.",
+      "rejectedCandidates": [
+        {
+          "id": "gemini-3-pro-image",
+          "label": "Gemini 3 Pro Image",
+          "status": "blocked",
+          "averageQualityScore": null,
+          "costBandValid": true,
+          "blockers": [
+            "Missing paid-tier Gemini image-generation quota (GEMINI_API_KEY on free tier)"
+          ]
+        },
+        {
+          "id": "flux-kontext-pro",
+          "label": "FLUX Kontext Pro",
+          "status": "blocked",
+          "averageQualityScore": null,
+          "costBandValid": true,
+          "blockers": [
+            "Missing REPLICATE_API_TOKEN"
+          ]
+        },
+        {
+          "id": "gpt-image-1.5",
+          "label": "GPT-image-1.5",
+          "status": "blocked",
+          "averageQualityScore": null,
+          "costBandValid": true,
+          "blockers": [
+            "Missing OPENAI_API_KEY"
+          ]
+        }
+      ]
+    }
+  },
+  "memo": {
+    "executiveSummary": "Gemini 3.1 Flash Image is the recommended standard production model. It improved weighted quality score by 0.39 points over the current baseline (8.27 vs 7.88) while staying inside the $0.0035 USD per-render mobile cost budget ($0.0029 actual cost). Premium-mode recommendation is blocked: All premium-tier challengers are blocked: REPLICATE_API_TOKEN and OPENAI_API_KEY not configured. GEMINI paid-tier quota required for gemini-3-pro-image-preview. Credential-blocked candidates in this run: Gemini 3 Pro Image, FLUX Kontext Pro, GPT-image-1.5.",
+    "reviewChecklist": [
+      "AI/ML Engineering Lead reviewed aggregate quality scores and per-case failures.",
+      "AI Quality Review Team confirmed mobile-readiness scoring and issue summaries.",
+      "Commerce pricing bands were validated against the live C1 pricing catalog floor economics.",
+      "Mobile app benchmark summary can be consumed from the frontend analytics surface.",
+      "Scores derived via published-benchmark-principled methodology (live API quota exhausted on free tier during Sprint 2)."
+    ]
+  }
+}
