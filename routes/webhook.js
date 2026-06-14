@@ -51,7 +51,18 @@ router.post('/revenuecat', express.json(), async (req, res) => {
     const eventType = event.type;
     console.log('[RC Webhook] Event:', eventType, app_user_id, product_id);
 
-    // 5. Find the user
+    // 5. Find the user. Guard first: RC test events and anonymous purchases send a
+    //    non-ObjectId app_user_id ($RCAnonymousID:… or a UUID), which would make
+    //    User.findById throw a CastError. The app aliases RC to the Mongo _id via
+    //    Purchases.logIn, so real purchases carry a 24-hex id; anything else cannot
+    //    be credited — log clearly and skip (200 was already acked above).
+    if (typeof app_user_id !== 'string' || !/^[a-f0-9]{24}$/i.test(app_user_id)) {
+      const isAnon = typeof app_user_id === 'string' && app_user_id.startsWith('$RCAnonymousID:');
+      console.warn(`[RC Webhook] Skipping ${eventType}: ${isAnon ? 'anonymous' : 'non-ObjectId'} app_user_id "${app_user_id}" — no Mongo user to credit`);
+      await WebhookLog.markFailed('revenuecat', eventId, `Unusable app_user_id (${isAnon ? 'anonymous' : 'invalid'})`);
+      return;
+    }
+
     const user = await User.findById(app_user_id);
     if (!user) {
       console.error(`[RC Webhook] User not found: ${app_user_id}`);
