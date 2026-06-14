@@ -135,10 +135,11 @@ const creditPacks = [
       dodo: {
         productId: 'pdt_ZaJToyG0j8zfq1zbcDMUD',
         checkoutBaseUrl: DODO_CHECKOUT_BASE_URL,
+        // Floored at ~$0.04/credit so even the bulk tier stays above AI cost.
         price: {
-          amount: 199.99,
+          amount: 399.99,
           currency: 'USD',
-          formatted: '$199.99'
+          formatted: '$399.99'
         }
       }
     }

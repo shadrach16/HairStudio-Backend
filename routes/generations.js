@@ -552,6 +552,12 @@ const MODE_PRICING = {
   pro:      { multiplier: 3, label: 'Pro',      model: 'gemini-3-pro-image-preview' },
 };
 
+// Margin floor: every generation fires ~4–5 Gemini calls (input gate, hair mask,
+// style analysis, image gen, output-quality check), so a standard try-on must
+// never cost fewer than this many credits, regardless of the per-style price
+// (which can be 0). HD/Pro scale via their multiplier. Tune as costs change.
+const MIN_GENERATION_CREDITS = 2;
+
 
 // Generate hairstyle (Standard Hairstyle Generation)
 // Rate limited to prevent AI abuse
@@ -610,8 +616,11 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
       return res.status(400).json({ success: false, message: 'Insufficient credits' });
     }
 
-    // A4: Calculate actual cost based on generation mode
-    const modeCost = Math.ceil(hairstyle.price * modeConfig.multiplier);
+    // A4: Calculate actual cost based on generation mode, never below the margin floor
+    const modeCost = Math.max(
+      Math.ceil(MIN_GENERATION_CREDITS * modeConfig.multiplier),
+      Math.ceil(hairstyle.price * modeConfig.multiplier)
+    );
     if (user.credits < modeCost) {
       return res.status(400).json({
         success: false,

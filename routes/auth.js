@@ -394,12 +394,14 @@ router.put('/profile', protect, async (req, res, next) => {
 
 
 
-// Get payments reward ads with daily cap
-// Config: max 4 rewards per day (2 credits total)
+// Get payments reward ads with daily cap.
+// A rewarded-ad view earns only ~$0.001–0.01 (eCPM-dependent), but each granted
+// credit costs ~$0.05 of AI. Keep the daily free grant small so ads don't run at a
+// loss; this caps free AI exposure at 0.5 credit/user/day. Tune per ad revenue.
 const REWARD_AD_CONFIG = {
-  creditsPerReward: 0.5,
-  maxRewardsPerDay: 4,
-  maxCreditsPerDay: 2
+  creditsPerReward: 0.25,
+  maxRewardsPerDay: 2,
+  maxCreditsPerDay: 0.5
 };
 
 // Apply reward rate limit to prevent abuse
