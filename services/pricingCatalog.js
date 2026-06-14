@@ -143,20 +143,6 @@ const creditPacks = [
         }
       }
     }
-  },
-  {
-    id: 'unlimited',
-    type: 'credit_pack',
-    name: 'Lifetime Access (VIP)',
-    description: 'One-time native purchase for unlimited high-volume access.',
-    credits: 9999999,
-    displayLabel: 'Lifetime Access',
-    displayOrder: 80,
-    storefronts: {
-      revenueCat: {
-        productId: 'unlimited'
-      }
-    }
   }
 ];
 
