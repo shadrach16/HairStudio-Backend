@@ -28,6 +28,8 @@ const pushRoutes = require('./routes/push');
 const savedLooksRoutes = require('./routes/savedLooks');
 const collectionRoutes = require('./routes/collections');
 const p2cRoutes = require('./routes/p2c'); // Photo2Calendar proxy (isolated)
+const attributionRoutes = require('./routes/attribution'); // install/campaign attribution
+const deeplinkRoutes = require('./routes/deeplink'); // /go landing + assetlinks.json (App Links)
 
 
 const app = express();
@@ -127,6 +129,8 @@ app.use('/api/watermark', watermarkRoutes);
 app.use('/api/saved-looks', savedLooksRoutes);
 app.use('/api/collections', collectionRoutes);
 app.use('/api/p2c', p2cRoutes); // Photo2Calendar proxy (isolated)
+app.use('/api/attribution', attributionRoutes);
+app.use('/', deeplinkRoutes); // serves /go and /.well-known/assetlinks.json
 
 // Root endpoint
 app.get('/', (req, res) => {
