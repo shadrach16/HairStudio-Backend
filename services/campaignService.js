@@ -77,6 +77,24 @@ const CAMPAIGNS = {
       const { title, body } = personalize(base, user.name);
       return { title, body, data: { screen: 'home', action: 'daily_nudge' } };
     }
+  },
+  daily_recommendation: {
+    maxPerDay: 1,
+    minIntervalHours: 20,
+    // Personalized: extra.message is a style-filled template ({name} still to fill);
+    // extra.data carries the recommended hairstyle id + the tap link.
+    getMessage: (user, extra = {}) => {
+      const base = extra.message || {
+        title: '💇 A look picked for you',
+        body: 'Come see a hairstyle we think suits you.'
+      };
+      const { title, body } = personalize(base, user.name);
+      return {
+        title,
+        body,
+        data: extra.data || { screen: 'home', action: 'daily_recommendation', link: '/' }
+      };
+    }
   }
 };
 
@@ -280,6 +298,59 @@ async function runDailyNudgeCampaign() {
 }
 
 /**
+ * PERSONALIZED daily nudge: recommends a specific hairstyle to each user based on
+ * their taste (recommendationService, cold-start-safe), fills an AI template with
+ * that style, deep-links the tap to it, and falls back to a generic nudge if a
+ * recommendation can't be made. One AI call per run for the templates.
+ * (Run once daily via cron — see scripts/sendDailyNudge.js)
+ */
+async function runDailyRecommendationCampaign() {
+  console.log('🎯 Running personalized daily recommendation campaign...');
+  const { generateRecommendationTemplates, fillStyle, generateNudges } = require('./aiNudgeService');
+  const recommendationService = require('./recommendationService');
+
+  const templates = await generateRecommendationTemplates(10);
+  const genericPool = await generateNudges(8); // fallback when no recommendation
+
+  const users = await User.find({
+    deviceToken: { $exists: true, $ne: null },
+    'preferences.notifications': { $ne: false }
+  }).select('_id name gender').limit(1000);
+
+  let sent = 0;
+  let personalized = 0;
+  for (const user of users) {
+    let message = null;
+    let data = { screen: 'home', action: 'daily_recommendation', link: '/' };
+    try {
+      const recs = await recommendationService.getForYouRecommendations(user._id, {
+        gender: user.gender || undefined,
+        limit: 3
+      });
+      const top = Array.isArray(recs) ? recs.find((r) => r && r.name) : null;
+      if (top) {
+        const tpl = templates[Math.floor(Math.random() * templates.length)];
+        message = fillStyle(tpl, { style: top.name, category: top.category });
+        // Tap routes home; the app sets this hairstyle as the pending deep-link
+        // target (contextual paywall) once it reads data.hairstyleId.
+        data = { screen: 'home', action: 'daily_recommendation', link: '/', hairstyleId: String(top._id) };
+        personalized++;
+      }
+    } catch (e) {
+      console.warn(`[rec] failed for ${user._id}: ${e.message}`);
+    }
+    if (!message) {
+      message = genericPool[Math.floor(Math.random() * genericPool.length)];
+    }
+    const result = await sendCampaign(user._id, 'daily_recommendation', { message, data });
+    if (result.success) sent++;
+  }
+
+  console.log(`✅ Daily recommendations sent: ${sent}/${users.length} (${personalized} personalized)`);
+  return { total: users.length, sent, personalized };
+}
+
+/**
  * Run all scheduled batch campaigns in sequence
  * Called by the /api/push/cron endpoint or an external scheduler
  */
@@ -311,6 +382,7 @@ module.exports = {
   announceNewDrop,
   runWinBackCampaign,
   runDailyNudgeCampaign,
+  runDailyRecommendationCampaign,
   runScheduledCampaigns,
   CAMPAIGNS
 };

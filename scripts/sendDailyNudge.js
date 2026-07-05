@@ -1,15 +1,16 @@
 // scripts/sendDailyNudge.js
-// Sends the daily AI-generated re-engagement nudge to all eligible users.
-// Intended to be run once a day by system cron. Per-user rate limits in
-// campaignService prevent duplicates if it ever runs more than once.
+// Sends the daily PERSONALIZED recommendation nudge to all eligible users:
+// each user gets a hairstyle recommended from their own taste, deep-linked to it,
+// falling back to a generic nudge when no recommendation is available.
+// Run once a day by system cron. Per-user rate limits prevent duplicates.
 //
 //   node scripts/sendDailyNudge.js
-//   node scripts/sendDailyNudge.js --dry   (generate + log messages, send nothing)
+//   node scripts/sendDailyNudge.js --dry   (generate + log sample messages, send nothing)
 
 require('dotenv').config();
 const mongoose = require('mongoose');
-const { runDailyNudgeCampaign } = require('../services/campaignService');
-const { generateNudges, personalize } = require('../services/aiNudgeService');
+const { runDailyRecommendationCampaign } = require('../services/campaignService');
+const { generateRecommendationTemplates, fillStyle, personalize } = require('../services/aiNudgeService');
 
 const DRY_RUN = process.argv.includes('--dry');
 
@@ -20,15 +21,17 @@ const DRY_RUN = process.argv.includes('--dry');
   console.log('Connected to MongoDB');
 
   if (DRY_RUN) {
-    console.log('🧪 DRY RUN — generating sample messages, not sending:');
-    const pool = await generateNudges(15);
-    pool.forEach((m, i) => {
-      const p = personalize(m, 'Ada');
-      console.log(`  ${String(i + 1).padStart(2)}. [${p.title}] ${p.body}`);
+    console.log('🧪 DRY RUN — sample personalized recommendation messages (not sending):');
+    const templates = await generateRecommendationTemplates(10);
+    const sampleStyles = ['Box Braids', 'Textured Crop Fade', 'Soft Locs', 'Slicked-Back Undercut'];
+    templates.forEach((t, i) => {
+      const style = sampleStyles[i % sampleStyles.length];
+      const p = personalize(fillStyle(t, { style }), 'Ada');
+      console.log(`  ${String(i + 1).padStart(2)}. [${p.title}]  ${p.body}`);
     });
   } else {
-    const result = await runDailyNudgeCampaign();
-    console.log('Daily nudge result:', JSON.stringify(result, null, 2));
+    const result = await runDailyRecommendationCampaign();
+    console.log('Daily recommendation result:', JSON.stringify(result, null, 2));
   }
 
   await mongoose.disconnect();

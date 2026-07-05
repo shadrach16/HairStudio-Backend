@@ -62,7 +62,7 @@ const userSchema = new mongoose.Schema({
   },
   credits: {
     type: Number,
-    default: 5, // Free trial credits
+    default: 10, // Free trial credits (enough for 2-3 first try-ons before the paywall)
     min: 0
   },
   subscription: {

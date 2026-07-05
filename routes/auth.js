@@ -224,7 +224,7 @@ router.post('/google', async (req, res, next) => {
 
         // Give them full signup credits (5) if they only had guest credits (1)
         if (guestCreditsBeforeConversion <= 1) {
-          const signupBonus = Math.max(0, 5 - guestCreditsBeforeConversion);
+          const signupBonus = Math.max(0, 10 - guestCreditsBeforeConversion);
           if (signupBonus > 0) {
             const signupBonusResult = await creditLedger.creditUser({
               userId: user._id,
@@ -256,7 +256,7 @@ router.post('/google', async (req, res, next) => {
 
         const signupBonusResult = await creditLedger.creditUser({
           userId: user._id,
-          amount: 5,
+          amount: 10,
           kind: 'signup_bonus',
           source: 'signup',
           reason: 'Initial signup credits',
