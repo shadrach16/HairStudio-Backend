@@ -546,10 +546,12 @@ const hairstyleFile = files.hairstyleImage[0];
 
 
 // A4: Generation mode pricing multipliers and model selection
+// Model IDs use the STABLE GA ids (the -preview ids are deprecated). Verified live.
+//   Standard = Nano Banana | HD = Nano Banana 2 | Pro = Nano Banana Pro (best identity)
 const MODE_PRICING = {
-  standard: { multiplier: 1, label: 'Standard', model: 'gemini-2.5-flash-image' },
-  hd:       { multiplier: 2, label: 'HD',       model: 'gemini-3.1-flash-image-preview' },
-  pro:      { multiplier: 3, label: 'Pro',      model: 'gemini-3-pro-image-preview' },
+  standard: { multiplier: 1, credits: 2, label: 'Standard', model: 'gemini-2.5-flash-image' },
+  hd:       { multiplier: 2, credits: 4, label: 'HD',       model: 'gemini-3.1-flash-image' },
+  pro:      { multiplier: 3, credits: 6, label: 'Pro',      model: 'gemini-3-pro-image' },
 };
 
 // Margin floor: every generation fires ~4–5 Gemini calls (input gate, hair mask,
@@ -612,15 +614,12 @@ router.post('/generate', protect, generationLimit, upload.single('image'), [
       });
     }
 
-    if (user.credits < hairstyle.price) {
+    if (user.credits < modeConfig.credits) {
       return res.status(400).json({ success: false, message: 'Insufficient credits' });
     }
 
-    // A4: Calculate actual cost based on generation mode, never below the margin floor
-    const modeCost = Math.max(
-      Math.ceil(MIN_GENERATION_CREDITS * modeConfig.multiplier),
-      Math.ceil(hairstyle.price * modeConfig.multiplier)
-    );
+    // A4: Flat, predictable per-tier cost (matches exactly what the app displays).
+    const modeCost = modeConfig.credits;
     if (user.credits < modeCost) {
       return res.status(400).json({
         success: false,
