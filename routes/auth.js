@@ -156,8 +156,8 @@ router.post('/google', async (req, res, next) => {
       }
     }
 
-    let user = await User.findOne({ 
-      $or: [{ googleId }, { email }] 
+    let user = await User.findOne({
+      $or: [{ googleId }, { email: (email || '').toLowerCase() }]
     });
 
     if (user) {
@@ -244,25 +244,39 @@ router.post('/google', async (req, res, next) => {
         }, user._id);
       } else {
         // Brand new user
-        user = await User.create({
-          googleId,
-          email,
-          name,
-          avatar,
-          credits: 0,
-          lastLogin: new Date(),
-          isActive: true
-        });
+        try {
+          user = await User.create({
+            googleId,
+            email,
+            name,
+            avatar,
+            credits: 0,
+            lastLogin: new Date(),
+            isActive: true
+          });
 
-        const signupBonusResult = await creditLedger.creditUser({
-          userId: user._id,
-          amount: 10,
-          kind: 'signup_bonus',
-          source: 'signup',
-          reason: 'Initial signup credits',
-          description: 'Welcome credit bundle for new account'
-        });
-        user = signupBonusResult.user;
+          const signupBonusResult = await creditLedger.creditUser({
+            userId: user._id,
+            amount: 10,
+            kind: 'signup_bonus',
+            source: 'signup',
+            reason: 'Initial signup credits',
+            description: 'Welcome credit bundle for new account'
+          });
+          user = signupBonusResult.user;
+        } catch (createErr) {
+          // Sign-in race/retry (common on slow networks): a concurrent request
+          // already created this account, so the unique email/googleId collides
+          // (E11000). Re-fetch and log them in instead of erroring out.
+          if (createErr.code === 11000) {
+            user = await User.findOne({
+              $or: [{ googleId }, { email: (email || '').toLowerCase() }]
+            });
+            if (!user) throw createErr;
+          } else {
+            throw createErr;
+          }
+        }
       }
 
 
