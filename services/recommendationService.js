@@ -5,6 +5,22 @@
 const Hairstyle = require('../models/Hairstyle');
 const Generation = require('../models/Generation');
 
+// The catalogue's differentiator (and the product's target audience): textured
+// and protective styles. Used to bias the cold-start shelf — see the cold-start
+// branch in getForYouRecommendations for why.
+const TEXTURED_CATEGORIES = [
+  'Braids',
+  'Locs',
+  'Twists',
+  'Afros',
+  'Coils',
+  'Fades',
+  'Protective',
+  'Weaves',
+  'Low Cut',
+  'Traditional'
+];
+
 /**
  * Get personalized "For You" recommendations based on user history
  */
@@ -74,12 +90,35 @@ async function getForYouRecommendations(userId, { gender, limit = 8 } = {}) {
 
     recommendations = [...preferred, ...discovery];
   } else {
-    // Cold start: use overall popularity
-    recommendations = await Hairstyle.find(query)
+    // COLD START — the first impression, and the one that decides whether a new
+    // user sees an app "for them". Raw popularity was surfacing mostly European
+    // styles (blonde updos, rose buns) on an app whose differentiator is
+    // textured/protective hair, so new users met a catalogue that looked like
+    // every other try-on app. Lead with the textured categories, then fill with
+    // overall popularity so the shelf is never short.
+    const SELECT =
+      '_id name thumbnail price category gender popularity generationCount averageRating attributes';
+
+    const textured = await Hairstyle.find({
+      ...query,
+      category: { $in: TEXTURED_CATEGORIES }
+    })
+      .sort({ popularity: -1, averageRating: -1 })
+      .limit(Math.ceil(limit * 0.7))
+      .select(SELECT)
+      .lean();
+
+    const texturedIds = new Set(textured.map((s) => s._id.toString()));
+    const filler = await Hairstyle.find({
+      ...query,
+      _id: { ...(query._id || {}), $nin: [...Array.from(usedStyleIds), ...texturedIds] }
+    })
       .sort({ popularity: -1, averageRating: -1 })
       .limit(limit)
-      .select('_id name thumbnail price category gender popularity generationCount averageRating attributes')
+      .select(SELECT)
       .lean();
+
+    recommendations = [...textured, ...filler];
   }
 
   // Tag each with recommendation reason
