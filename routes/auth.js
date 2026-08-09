@@ -98,22 +98,25 @@ router.post('/guest', guestLimit, async (req, res, next) => {
       isActive: true
     });
 
+    // Must cover at least one real generation: flat tier pricing makes Standard
+    // cost 2 credits, so the old 1-credit grant left guests unable to generate at
+    // all. 4 = two Standard try-ons (the first selfie is often a throwaway).
     const guestGrant = await creditLedger.creditUser({
       userId: user._id,
-      amount: 1,
+      amount: 4,
       kind: 'signup_bonus',
       source: 'guest_trial',
-      reason: 'Guest session starter credit',
-      description: 'Initial guest trial credit'
+      reason: 'Guest session starter credits',
+      description: 'Initial guest trial credits (2 try-ons)'
     });
     user = guestGrant.user;
 
     await Analytics.trackEvent('guest_session_created', {
       deviceId: deviceId.slice(0, 8) + '...',
-      credits: 1
+      credits: 4
     }, user._id);
 
-    sendTokenResponse(user, 201, res, 'Guest session created! Sign in to get 5 free credits.');
+    sendTokenResponse(user, 201, res, 'Guest session created! Sign in to get 10 free credits.');
   } catch (error) {
     // Handle duplicate key error (race condition)
     if (error.code === 11000) {
