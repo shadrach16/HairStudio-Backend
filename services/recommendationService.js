@@ -99,12 +99,16 @@ async function getForYouRecommendations(userId, { gender, limit = 8 } = {}) {
     const SELECT =
       '_id name thumbnail price category gender popularity generationCount averageRating attributes';
 
+    // Take the FULL shelf from textured categories when the catalogue can
+    // supply it (it has ~187 such styles). An earlier 70% split left the
+    // remaining slots to overall popularity, which put blonde updos back on the
+    // first shelf a new user sees — defeating the point of the bias.
     const textured = await Hairstyle.find({
       ...query,
       category: { $in: TEXTURED_CATEGORIES }
     })
       .sort({ popularity: -1, averageRating: -1 })
-      .limit(Math.ceil(limit * 0.7))
+      .limit(limit)
       .select(SELECT)
       .lean();
 
