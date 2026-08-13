@@ -4,6 +4,7 @@ const { optionalAuth, protect } = require('../middleware/auth');
 const Analytics = require('../models/Analytics');
 const { extractAttributes } = require('../services/attributeExtractor');
 const { PROMPT_VERSION } = require('../prompts/promptFamilies');
+const { TEXTURED_CATEGORIES } = require('../services/recommendationService');
 
 const router = express.Router();
 
@@ -138,11 +139,34 @@ router.get('/', optionalAuth, async (req, res, next) => {
     // Ensure page is valid
     const pageNum = parseInt(page);
     const skip = (pageNum - 1) * limitNum;
-    
-    const hairstyles = await Hairstyle.find(filters)
-      .sort(sortOptions)
-      .skip(skip)
-      .limit(limitNum);
+
+    let hairstyles;
+    if (sort === 'featured') {
+      // The main browse feed. Ranks the textured/protective catalogue first,
+      // then popularity — the same bias already applied to For You and
+      // Trending. Without it the app's primary surface opens on whatever is
+      // globally popular, which is not what this app is differentiated on.
+      // Needs an aggregation: category-priority can't be expressed as a plain
+      // sort, and paging must happen after the ranking.
+      hairstyles = await Hairstyle.aggregate([
+        { $match: filters },
+        {
+          $addFields: {
+            texturedRank: {
+              $cond: [{ $in: ['$category', TEXTURED_CATEGORIES] }, 0, 1]
+            }
+          }
+        },
+        { $sort: { texturedRank: 1, popularity: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limitNum }
+      ]);
+    } else {
+      hairstyles = await Hairstyle.find(filters)
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limitNum);
+    }
 
     // console.log('hairstyles',hairstyles)
 

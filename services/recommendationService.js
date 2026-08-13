@@ -214,19 +214,45 @@ async function getTrendingStyles({ gender, limit = 8, daysBack = 7 } = {}) {
   const trendingIds = trending.map(t => t._id).filter(Boolean);
 
   if (trendingIds.length === 0) {
-    // Fallback to overall popular
+    // Fallback when nothing has been generated recently (i.e. most of the time
+    // on a young app). This path feeds BOTH the Trending shelf and the featured
+    // hero card, so an unbiased popularity sort put a platinum-blonde buzz cut
+    // in the single most prominent slot on the home screen. Lead with the
+    // textured catalogue here too, and only top up if it runs short.
     const query = { isActive: true };
     if (gender) query.gender = { $in: [gender, 'unisex'] };
-    return Hairstyle.find(query)
+    const SELECT =
+      '_id name thumbnail price category gender popularity generationCount averageRating attributes';
+
+    const textured = await Hairstyle.find({
+      ...query,
+      category: { $in: TEXTURED_CATEGORIES }
+    })
       .sort({ popularity: -1 })
       .limit(limit)
-      .select('_id name thumbnail price category gender popularity generationCount averageRating attributes')
-      .lean()
-      .then(styles => styles.map(s => ({
-        ...s,
-        trendScore: s.popularity,
-        recommendationReason: 'Popular style'
-      })));
+      .select(SELECT)
+      .lean();
+
+    const styles =
+      textured.length >= limit
+        ? textured
+        : [
+            ...textured,
+            ...(await Hairstyle.find({
+              ...query,
+              _id: { $nin: textured.map((s) => s._id) }
+            })
+              .sort({ popularity: -1 })
+              .limit(limit - textured.length)
+              .select(SELECT)
+              .lean())
+          ];
+
+    return styles.map((s) => ({
+      ...s,
+      trendScore: s.popularity,
+      recommendationReason: 'Popular style'
+    }));
   }
 
   const query = { _id: { $in: trendingIds }, isActive: true };
@@ -288,6 +314,7 @@ function getStyleContextNotes(hairstyle) {
 }
 
 module.exports = {
+  TEXTURED_CATEGORIES,
   getForYouRecommendations,
   getSimilarStyles,
   getTrendingStyles,
